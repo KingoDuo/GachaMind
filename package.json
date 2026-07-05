@@ -1,0 +1,11 @@
+{
+  "name": "gachamind",
+  "private": true,
+  "packageManager": "pnpm@11.10.0",
+  "scripts": {
+    "dev:web": "pnpm --filter web dev",
+    "dev:game-room": "pnpm --filter game-room-server dev",
+    "build": "pnpm -r build",
+    "cluster:game-room": "pnpm --filter game-room-server build && pnpm --filter game-room-server pm2"
+  }
+}
