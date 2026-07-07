@@ -4,8 +4,16 @@ import type { ClientToServerMessage, ServerToClientMessage } from "@gachamind/sh
 import { RoomManager } from "./room.js";
 
 const PORT = Number(process.env.PORT ?? 4001);
+const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
 
 const roomManager = new RoomManager();
+
+/** 방이 비어서 정리됐을 때 web의 room-registry에도 알려준다(실패해도 게임 로직엔 영향 없음). */
+function notifyRoomReleased(roomId: string): void {
+  fetch(`${WEB_ORIGIN}/api/rooms/${roomId}`, { method: "DELETE" }).catch((err) => {
+    console.error(`[room ${roomId}] failed to notify web of release:`, err);
+  });
+}
 const wss = new WebSocketServer({ port: PORT });
 
 console.log(`[game-room-server] pid=${process.pid} listening on ${PORT}`);
@@ -54,7 +62,9 @@ wss.on("connection", (socket: WebSocket) => {
     };
     room.broadcast(payload);
     console.log(`[room ${room.id}] player left (${room.size} players)`);
-    roomManager.removeIfEmpty(room.id);
+    if (roomManager.removeIfEmpty(room.id)) {
+      notifyRoomReleased(room.id);
+    }
   });
 });
 

@@ -11,7 +11,9 @@ export default function RoomPage() {
 
   const [playerCount, setPlayerCount] = useState(0);
   const [log, setLog] = useState<string[]>([]);
-  const [status, setStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
+  const [status, setStatus] = useState<
+    "connecting" | "connected" | "disconnected" | "not-found"
+  >("connecting");
   const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -19,6 +21,10 @@ export default function RoomPage() {
 
     async function connect() {
       const res = await fetch(`/api/rooms/${roomId}`);
+      if (res.status === 404) {
+        if (!cancelled) setStatus("not-found");
+        return;
+      }
       const { port } = await res.json();
       if (cancelled) return;
 
@@ -56,7 +62,19 @@ export default function RoomPage() {
     connecting: { label: "연결 중", dot: "bg-amber-400" },
     connected: { label: "연결됨", dot: "bg-emerald-500" },
     disconnected: { label: "연결 끊김", dot: "bg-red-500" },
+    "not-found": { label: "방을 찾을 수 없음", dot: "bg-red-500" },
   }[status];
+
+  if (status === "not-found") {
+    return (
+      <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col items-center justify-center gap-4 px-6 py-16 text-center">
+        <h1 className="text-2xl font-bold tracking-tight">방을 찾을 수 없습니다</h1>
+        <p className="text-sm text-muted">
+          방 코드 {roomId}가 존재하지 않거나 이미 종료되었습니다.
+        </p>
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-2xl flex-col gap-6 px-6 py-10">

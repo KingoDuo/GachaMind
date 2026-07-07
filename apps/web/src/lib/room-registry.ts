@@ -1,9 +1,9 @@
 // web을 단일 인스턴스로 가정한 in-memory 라우팅 테이블.
 // web이 멀티 인스턴스가 되면 이 Map을 Redis(room_id -> port)로 교체해야 한다.
 //
-// 알려진 한계: game-room-server가 방 전원 퇴장 시 자신의 내부 Map에서 room을 지우더라도
-// 이 registry에는 알려주지 않는다. 그래서 portLoad는 "이 포트에 배정된 방 수"의 근사치이며
-// 실시간 정확한 연결 수는 아니다 (뼈대 단계 한계, 다음 단계에서 개선 대상).
+// game-room-server는 방이 비면 DELETE /api/rooms/[roomId]로 releaseRoom을 호출해
+// 이 registry에도 알려준다. 다만 그 콜백이 실패/지연되는 경우(네트워크 오류, web 재시작 등)에는
+// portLoad가 실제 연결 수와 어긋날 수 있다 — 여전히 근사치임을 감안할 것.
 
 const GAME_ROOM_PORTS: number[] = (process.env.GAME_ROOM_PORTS ?? "4001,4002,4003,4004")
   .split(",")
@@ -39,6 +39,15 @@ export function assignRoom(roomId: string): number {
 
 export function getRoomPort(roomId: string): number | undefined {
   return roomToPort.get(roomId);
+}
+
+/** game-room-server가 방이 비어서 정리했을 때 호출하는 콜백이 부르는 함수. */
+export function releaseRoom(roomId: string): void {
+  const port = roomToPort.get(roomId);
+  if (port === undefined) return;
+  roomToPort.delete(roomId);
+  portLoad.set(port, Math.max(0, (portLoad.get(port) ?? 0) - 1));
+  console.log(`[room-registry] released room=${roomId} (was on port=${port})`);
 }
 
 export function listAssignments(): { roomId: string; port: number }[] {

@@ -1,11 +1,23 @@
-import { assignRoom } from "@/lib/room-registry";
+import { getRoomPort, releaseRoom } from "@/lib/room-registry";
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ roomId: string }> },
 ) {
   const { roomId } = await params;
-  // 뼈대 단계: 방 존재 여부를 별도로 검증하지 않고, 없으면 새로 배정한다.
-  const port = assignRoom(roomId);
+  const port = getRoomPort(roomId);
+  if (port === undefined) {
+    return Response.json({ error: "room not found" }, { status: 404 });
+  }
   return Response.json({ roomId, port });
+}
+
+/** game-room-server가 방이 비어서 정리했을 때 호출하는 콜백. */
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ roomId: string }> },
+) {
+  const { roomId } = await params;
+  releaseRoom(roomId);
+  return new Response(null, { status: 204 });
 }

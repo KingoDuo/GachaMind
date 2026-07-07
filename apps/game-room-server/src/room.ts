@@ -54,12 +54,15 @@ export class RoomManager {
     return this.rooms.get(roomId);
   }
 
-  removeIfEmpty(roomId: string): void {
+  /** 방을 지웠으면 true를 반환한다(비어있지 않거나 존재하지 않으면 false). */
+  removeIfEmpty(roomId: string): boolean {
     const room = this.rooms.get(roomId);
     if (room && room.size === 0) {
       this.rooms.delete(roomId);
       console.log(`[room] removed ${roomId}`);
+      return true;
     }
+    return false;
   }
 
   get roomCount(): number {
