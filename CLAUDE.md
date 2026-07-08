@@ -25,8 +25,13 @@
 - least-connections에 쓰는 portLoad 카운터는 "이 포트에 배정된 방 수"의 근사치다 — game-room-server가 방을 비웠을 때 web에 알려주는 콜백이 없어서 실시간 연결 수와는 다를 수 있다.
 
 ### Redis
-- web이 단일 인스턴스인 동안은 in-memory Map으로 충분해서 아직 넣지 않았다.
-- web을 멀티 인스턴스로 늘려야 하는 시점에 라우팅 테이블을 Redis로 옮기는 게 확실한 용도이긴 한데, 그것과 별개로 Redis를 다뤄본 적이 없어서 이번 프로젝트에서 써보고 싶음 — 적절한 사용처를 계속 탐색 중.
+- 확정된 용도: **방 매칭** — 유저는 방을 직접 골라 들어가는 게 아니라 "진행 중인 방에 랜덤 난입"이 기본 옵션이 될 예정이다. 이걸 위해선 game-room-server가 여러 프로세스(포트)에 걸쳐 떠 있으므로, 각 프로세스에 어떤 방이 열려 있고 입장 가능한지(정원, 게임 페이즈 등)를 프로세스 경계를 넘어 공유해야 한다 — 인메모리 Map으로는 안 되는 지점이라 Redis를 붙였다.
+- 매칭 로직/데이터 모델(예: 방 상태 Hash, 입장 가능 방 Set)은 아직 구현 전이고, 우선 기초 연결 설정만 넣어둔 상태:
+  - 로컬 실행: 루트 `docker-compose.yml`의 `redis` 서비스, `pnpm redis:up` / `pnpm redis:down`으로 기동/종료.
+  - 클라이언트 라이브러리: `redis`(node-redis 공식) 패키지. `apps/game-room-server/src/redis.ts`(연결 후 `connectRedis()`를 index.ts 시작 시 await), `apps/web/src/lib/redis.ts`(Next dev HMR 대비 globalThis 캐싱 싱글턴, `getRedis()`로 lazy connect).
+  - 접속 주소는 `REDIS_URL` 환경변수(기본값 `redis://localhost:6379`).
+  - 프로젝트 전체가 휘발성 데이터 원칙이라 Redis도 영속 볼륨 없이 컨테이너 재시작 시 데이터가 날아가는 상태로 둔다.
+- web이 멀티 인스턴스로 늘어나면 `room-registry.ts`의 in-memory Map(`room_id → port`)도 같은 Redis로 옮기는 게 확실한 다음 단계.
 
 ### 메시지 큐
 - 아직 구체적인 용도는 정해지지 않았지만 다뤄보고 싶은 기술. 비교적 가벼운 RabbitMQ를 고려 중.
@@ -48,6 +53,9 @@ packages/shared/          # 클라이언트<->게임룸 서버 메시지 타입 
 
 ## 실행 방법
 ```bash
+# 0) Redis 기동 (최초 1회 / 재부팅 후, Docker Desktop 필요)
+pnpm redis:up
+
 # 1) 게임룸 서버(멀티프로세스)를 PM2로 기동 (4001~4004 포트, 최초 1회 pnpm install 필요)
 pnpm cluster:game-room
 
