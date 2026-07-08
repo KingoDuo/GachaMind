@@ -3,6 +3,8 @@
   "private": true,
   "packageManager": "pnpm@11.10.0",
   "scripts": {
+    "redis:up": "docker compose up -d redis",
+    "redis:down": "docker compose down",
     "dev:web": "pnpm --filter web dev",
     "dev:game-room": "pnpm --filter game-room-server dev",
     "build": "pnpm -r build",

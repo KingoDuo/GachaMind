@@ -2,9 +2,12 @@ import { randomUUID } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientToServerMessage, ServerToClientMessage } from "@gachamind/shared";
 import { RoomManager } from "./room.js";
+import { connectRedis } from "./redis.js";
 
 const PORT = Number(process.env.PORT ?? 4001);
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
+
+await connectRedis();
 
 const roomManager = new RoomManager();
 
