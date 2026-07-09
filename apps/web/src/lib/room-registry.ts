@@ -5,9 +5,11 @@
 // 이 registry에도 알려준다. 다만 그 콜백이 실패/지연되는 경우(네트워크 오류, web 재시작 등)에는
 // portLoad가 실제 연결 수와 어긋날 수 있다 — 여전히 근사치임을 감안할 것.
 
-const GAME_ROOM_PORTS: number[] = (process.env.GAME_ROOM_PORTS ?? "4001,4002,4003,4004")
-  .split(",")
-  .map((port) => Number(port.trim()));
+import gameRoomPorts from "../../../../game-room-ports.json";
+
+// game-room-server의 ecosystem.config.cjs와 같은 파일을 읽으므로 포트 목록을 두 곳에서
+// 따로 맞춰줄 필요가 없다.
+const GAME_ROOM_PORTS: number[] = gameRoomPorts.ports;
 
 const roomToPort = new Map<string, number>();
 const portLoad = new Map<number, number>(GAME_ROOM_PORTS.map((port) => [port, 0]));

@@ -23,6 +23,7 @@ export default function Home() {
   }
 
   async function handleQuickMatch() {
+    //닉네임 검증
     if (!nickname.trim()) return;
     setIsMatching(true);
     try {
