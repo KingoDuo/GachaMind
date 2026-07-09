@@ -8,6 +8,7 @@ export default function Home() {
   const [nickname, setNickname] = useState("");
   const [joinRoomId, setJoinRoomId] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  const [isMatching, setIsMatching] = useState(false);
 
   async function handleCreateRoom() {
     if (!nickname.trim()) return;
@@ -18,6 +19,18 @@ export default function Home() {
       router.push(`/room/${roomId}?nick=${encodeURIComponent(nickname)}`);
     } finally {
       setIsCreating(false);
+    }
+  }
+
+  async function handleQuickMatch() {
+    if (!nickname.trim()) return;
+    setIsMatching(true);
+    try {
+      const res = await fetch("/api/rooms/match", { method: "POST" });
+      const { roomId } = await res.json();
+      router.push(`/room/${roomId}?nick=${encodeURIComponent(nickname)}`);
+    } finally {
+      setIsMatching(false);
     }
   }
 
@@ -46,6 +59,13 @@ export default function Home() {
           className="w-full rounded-lg bg-brand px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isCreating ? "만드는 중..." : "방 만들기"}
+        </button>
+        <button
+          onClick={handleQuickMatch}
+          disabled={isMatching || !nickname.trim()}
+          className="w-full rounded-lg border border-border px-3 py-2 text-sm font-medium transition-colors hover:bg-background disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isMatching ? "매칭 중..." : "⚡ 빠른 시작"}
         </button>
 
         <div className="flex items-center gap-3 text-xs text-muted">

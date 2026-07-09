@@ -1,5 +1,7 @@
 import type { WebSocket } from "ws";
 
+export const DEFAULT_ROOM_CAPACITY = 100;
+
 export interface Player {
   id: string;
   nickname: string;
@@ -8,10 +10,12 @@ export interface Player {
 
 export class Room {
   readonly id: string;
+  readonly capacity: number;
   readonly players = new Map<string, Player>();
 
-  constructor(id: string) {
+  constructor(id: string, capacity: number = DEFAULT_ROOM_CAPACITY) {
     this.id = id;
+    this.capacity = capacity;
   }
 
   addPlayer(player: Player): void {
@@ -24,6 +28,10 @@ export class Room {
 
   get size(): number {
     return this.players.size;
+  }
+
+  get isFull(): boolean {
+    return this.players.size >= this.capacity;
   }
 
   broadcast(message: unknown, excludePlayerId?: string): void {

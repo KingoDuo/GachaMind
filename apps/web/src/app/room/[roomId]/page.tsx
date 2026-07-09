@@ -12,7 +12,7 @@ export default function RoomPage() {
   const [playerCount, setPlayerCount] = useState(0);
   const [log, setLog] = useState<string[]>([]);
   const [status, setStatus] = useState<
-    "connecting" | "connected" | "disconnected" | "not-found"
+    "connecting" | "connected" | "disconnected" | "not-found" | "room-full"
   >("connecting");
   const socketRef = useRef<WebSocket | null>(null);
 
@@ -39,6 +39,10 @@ export default function RoomPage() {
 
       socket.onmessage = (event) => {
         const message: ServerToClientMessage = JSON.parse(event.data);
+        if (message.type === "room-full") {
+          setStatus("room-full");
+          return;
+        }
         setPlayerCount(message.playerCount);
         if (message.type === "player-joined") {
           setLog((prev) => [...prev, `${message.nickname} 입장`]);
@@ -63,6 +67,7 @@ export default function RoomPage() {
     connected: { label: "연결됨", dot: "bg-emerald-500" },
     disconnected: { label: "연결 끊김", dot: "bg-red-500" },
     "not-found": { label: "방을 찾을 수 없음", dot: "bg-red-500" },
+    "room-full": { label: "정원 초과", dot: "bg-red-500" },
   }[status];
 
   if (status === "not-found") {
@@ -72,6 +77,15 @@ export default function RoomPage() {
         <p className="text-sm text-muted">
           방 코드 {roomId}가 존재하지 않거나 이미 종료되었습니다.
         </p>
+      </main>
+    );
+  }
+
+  if (status === "room-full") {
+    return (
+      <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col items-center justify-center gap-4 px-6 py-16 text-center">
+        <h1 className="text-2xl font-bold tracking-tight">방이 가득 찼습니다</h1>
+        <p className="text-sm text-muted">방 {roomId}의 정원이 가득 찼습니다.</p>
       </main>
     );
   }
