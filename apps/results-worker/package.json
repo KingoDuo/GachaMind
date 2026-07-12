@@ -1,23 +1,19 @@
 {
-  "name": "game-room-server",
+  "name": "results-worker",
   "private": true,
   "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
-    "pm2": "pm2 start ecosystem.config.cjs"
+    "start": "tsx src/index.ts"
   },
   "dependencies": {
     "@gachamind/shared": "workspace:*",
-    "redis": "^6.1.0",
-    "ws": "^8.18.0"
+    "amqplib": "^0.10.5"
   },
   "devDependencies": {
+    "@types/amqplib": "^0.10.5",
     "@types/node": "^22.10.0",
-    "@types/ws": "^8.5.13",
-    "pm2": "^5.4.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

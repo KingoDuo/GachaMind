@@ -1,6 +1,0 @@
-services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    # 프로젝트 전체가 휘발성 데이터로 운영되기 때문에 Redis도 컨테이너를 내리면 데이터가 사라지는 상태

@@ -3,11 +3,11 @@
   "private": true,
   "packageManager": "pnpm@11.10.0",
   "scripts": {
-    "redis:up": "docker compose up -d redis",
-    "redis:down": "docker compose down",
     "dev:web": "pnpm --filter web dev",
-    "dev:game-room": "pnpm --filter game-room-server dev",
-    "build": "pnpm -r build",
-    "cluster:game-room": "pnpm --filter game-room-server build && pnpm --filter game-room-server pm2"
+    "dev:matchmaking": "pnpm --filter matchmaking dev",
+    "dev:game-session": "pnpm --filter game-session dev",
+    "dev:user": "pnpm --filter user dev",
+    "dev:worker": "pnpm --filter results-worker dev",
+    "build": "pnpm -r build"
   }
 }

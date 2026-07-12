@@ -1,0 +1,68 @@
+# build context는 repo 루트(..). 서비스 간엔 컨테이너명(redis/postgres/rabbitmq…)으로 통신.
+# 휘발성 데이터 원칙에 따라 볼륨은 두지 않는다(컨테이너 내리면 데이터 소멸).
+name: gachamind
+
+services:
+  # ── 엣지: 브라우저가 직접 접근 → 호스트 포트 공개 ──
+  web:
+    build: { context: .., dockerfile: apps/web/Dockerfile }
+    ports: ["3000:3000"]
+    environment:
+      MATCHMAKING_URL: http://matchmaking:4000
+    depends_on: [matchmaking]
+
+  game-session-1:
+    build: { context: .., dockerfile: apps/game-session/Dockerfile }
+    ports: ["4001:4001"]
+    environment:
+      PORT: "4001"
+      MATCHMAKING_URL: http://matchmaking:4000
+      REDIS_URL: redis://redis:6379
+
+  game-session-2:
+    build: { context: .., dockerfile: apps/game-session/Dockerfile }
+    ports: ["4002:4002"]
+    environment:
+      PORT: "4002"
+      MATCHMAKING_URL: http://matchmaking:4000
+      REDIS_URL: redis://redis:6379
+
+  # ── 내부: web/서비스만 호출 → 호스트 포트 불필요 ──
+  matchmaking:
+    build: { context: .., dockerfile: apps/matchmaking/Dockerfile }
+    environment:
+      PORT: "4000"
+      REDIS_URL: redis://redis:6379
+      GAME_SESSION_PORTS: "4001,4002"
+    depends_on: [redis]
+
+  user:
+    build: { context: .., dockerfile: apps/user/Dockerfile }
+    environment:
+      PORT: "4010"
+      DATABASE_URL: postgresql://gachamind:gachamind@postgres:5432/gachamind
+    depends_on: [postgres]
+
+  results-worker:
+    build: { context: .., dockerfile: apps/results-worker/Dockerfile }
+    environment:
+      RABBITMQ_URL: amqp://rabbitmq:5672
+      DATABASE_URL: postgresql://gachamind:gachamind@postgres:5432/gachamind
+    depends_on: [rabbitmq, postgres]
+
+  # ── 인프라 (공식 이미지) ──
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  postgres:
+    image: postgres:16-alpine
+    ports: ["5432:5432"]
+    environment:
+      POSTGRES_USER: gachamind
+      POSTGRES_PASSWORD: gachamind
+      POSTGRES_DB: gachamind
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports: ["5672:5672", "15672:15672"] # 5672=AMQP, 15672=관리 UI
