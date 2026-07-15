@@ -8,6 +8,10 @@
     "dev:game-session": "pnpm --filter game-session dev",
     "dev:user": "pnpm --filter user dev",
     "dev:worker": "pnpm --filter results-worker dev",
+    "dev:all": "concurrently -n web,matchmaking,game-session,user,worker -c blue,green,yellow,magenta,cyan \"pnpm:dev:web\" \"pnpm:dev:matchmaking\" \"pnpm:dev:game-session\" \"pnpm:dev:user\" \"pnpm:dev:worker\"",
     "build": "pnpm -r build"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3"
   }
 }
