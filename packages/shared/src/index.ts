@@ -44,6 +44,9 @@ export interface RoomFullMessage {
 export type ClientToServerMessage = JoinRoomMessage;
 export type ServerToClientMessage = PlayerJoinedMessage | PlayerLeftMessage | RoomFullMessage;
 
+/** 방 하나의 최대 인원. matchmaking(Redis 기록)과 game-session(Room 정원)이 값을 공유한다. */
+export const DEFAULT_ROOM_CAPACITY = 100;
+
 // ────────────────────────────────────────────────────────────
 // Redis 키 규칙 (matchmaking ↔ game-session 공유 상태)
 //   room:{roomId}   Hash → { port, capacity, playerCount }

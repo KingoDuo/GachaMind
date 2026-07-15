@@ -1,6 +1,5 @@
 import type { WebSocket } from "ws";
-
-export const DEFAULT_ROOM_CAPACITY = 100;
+import { DEFAULT_ROOM_CAPACITY } from "@gachamind/shared";
 
 export interface Player {
   id: string;

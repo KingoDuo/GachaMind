@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "@gachamind/shared": "workspace:*",
-    "fastify": "^5.2.0"
+    "fastify": "^5.2.0",
+    "ioredis": "^5.11.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
