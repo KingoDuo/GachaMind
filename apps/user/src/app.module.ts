@@ -2,9 +2,10 @@ import { Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { AppController } from "./app.controller";
-import { User } from "./user/user.entity";
+import { AuthModule } from "./auth/auth.module";
+import { UserModule } from "./user/user.module";
 
-// TODO: AuthModule, ProfileModule 등을 여기에 추가.
+// TODO: ProfileModule, HistoryModule 등을 이후 슬라이스에서 추가.
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -19,7 +20,8 @@ import { User } from "./user/user.entity";
         synchronize: true, // dev 편의(엔티티→테이블 자동반영). TODO: 프로덕션 전 마이그레이션으로 전환.
       }),
     }),
-    TypeOrmModule.forFeature([User]),
+    UserModule,
+    AuthModule,
   ],
   controllers: [AppController],
 })

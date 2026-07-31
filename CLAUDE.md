@@ -57,6 +57,7 @@
 ### Redis
 - **확정 용도 — 방 매칭 공유상태**: game-session이 여러 replica에 흩어져 있으므로, 어떤 방이 어느 포트에 열려 있고 입장 가능한지를 프로세스 경계 너머로 공유해야 한다. matchmaking이 이 인덱스를 읽는다.
 - **향후 용도 — 세션/신원 브릿지**: user가 로그인 토큰을 발급하고 game-session이 검증할 때, 공유 세션 저장소로 쓸 수 있다(JWT 로컬검증 vs Redis 세션 중 택1).
+- **클라이언트는 `ioredis`로 통일** — Redis를 쓰는 모든 서비스는 node-redis가 아니라 ioredis를 쓴다(자동 연결·재연결, Cluster/Sentinel 성숙, BullMQ 등 생태계 호환). 명령어는 소문자(`hset`/`hgetall`).
 - 휘발성 원칙에 따라 영속 볼륨 없이 운영.
 
 ### RabbitMQ (메시지 큐)
