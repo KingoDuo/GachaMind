@@ -1,5 +1,6 @@
 "use client";
 
+import { XpWindow } from "@/features/ui/XpWindow";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -41,54 +42,72 @@ export default function Home() {
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-6 px-6 py-16">
-      <div className="text-center">
-        <h1 className="text-3xl font-bold tracking-tight">gachaMind</h1>
-        <p className="mt-1 text-sm text-muted">가챠마인드 by KingoDuo</p>
-      </div>
-
-      <div className="flex flex-col gap-4 rounded-2xl border border-border bg-surface p-6 shadow-sm">
-        <input
-          placeholder="닉네임"
-          value={nickname}
-          onChange={(e) => setNickname(e.target.value)}
-          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-brand"
-        />
-        <button
-          onClick={handleCreateRoom}
-          disabled={isCreating || !nickname.trim()}
-          className="w-full rounded-lg bg-brand px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {isCreating ? "만드는 중..." : "방 만들기"}
-        </button>
-        <button
-          onClick={handleQuickMatch}
-          disabled={isMatching || !nickname.trim()}
-          className="w-full rounded-lg border border-border px-3 py-2 text-sm font-medium transition-colors hover:bg-background disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {isMatching ? "매칭 중..." : "⚡ 빠른 시작"}
-        </button>
-
-        <div className="flex items-center gap-3 text-xs text-muted">
-          <span className="h-px flex-1 bg-border" />
-          또는
-          <span className="h-px flex-1 bg-border" />
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-6 py-16">
+      <XpWindow title="gachaMind" icon="🎨" bodyClassName="flex flex-col gap-3 p-4">
+        <div className="mb-1 flex items-center gap-3 border-b border-[#aca899] pb-3">
+          <span className="text-3xl" aria-hidden>
+            🖌️
+          </span>
+          <div>
+            <h1 className="text-lg font-bold">가챠마인드</h1>
+            <p className="text-xs text-muted">by KingoDuo</p>
+          </div>
         </div>
 
+        <label className="text-xs font-bold" htmlFor="nickname">
+          대화명
+        </label>
         <input
-          placeholder="방 코드"
-          value={joinRoomId}
-          onChange={(e) => setJoinRoomId(e.target.value)}
-          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-brand"
+          id="nickname"
+          placeholder="닉네임을 입력하세요"
+          value={nickname}
+          onChange={(e) => setNickname(e.target.value)}
+          className="xp-input w-full"
         />
-        <button
-          onClick={handleJoinRoom}
-          disabled={!nickname.trim() || !joinRoomId.trim()}
-          className="w-full rounded-lg border border-border px-3 py-2 text-sm font-medium transition-colors hover:bg-background disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          방 입장
-        </button>
-      </div>
+
+        <div className="mt-1 flex gap-2">
+          <button
+            onClick={handleCreateRoom}
+            disabled={isCreating || !nickname.trim()}
+            className="xp-button xp-button-default flex-1"
+          >
+            {isCreating ? "만드는 중..." : "방 만들기"}
+          </button>
+          <button
+            onClick={handleQuickMatch}
+            disabled={isMatching || !nickname.trim()}
+            className="xp-button flex-1"
+          >
+            {isMatching ? "매칭 중..." : "빠른 시작"}
+          </button>
+        </div>
+
+        <div className="my-1 flex items-center gap-3 text-xs text-muted">
+          <span className="h-0.5 flex-1 border-t border-b border-t-[#aca899] border-b-white" />
+          또는
+          <span className="h-0.5 flex-1 border-t border-b border-t-[#aca899] border-b-white" />
+        </div>
+
+        <label className="text-xs font-bold" htmlFor="room-code">
+          방 코드
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="room-code"
+            placeholder="초대받은 방 코드"
+            value={joinRoomId}
+            onChange={(e) => setJoinRoomId(e.target.value)}
+            className="xp-input min-w-0 flex-1"
+          />
+          <button
+            onClick={handleJoinRoom}
+            disabled={!nickname.trim() || !joinRoomId.trim()}
+            className="xp-button"
+          >
+            입장
+          </button>
+        </div>
+      </XpWindow>
     </main>
   );
 }
