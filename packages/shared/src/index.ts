@@ -216,6 +216,7 @@ export function normalizeAnswer(text: string): string {
 // Redis 키 규칙 (matchmaking - game-session 공유 상태)
 //   room:{roomId}   Hash: { port, capacity, playerCount }
 //   rooms:joinable  Set:  정원이 남은 roomId들
+//   session:{port}  Hash: { port, rooms, connections }  replica별 부하
 
 /**
  * Redis에 기록되는 방 사본. 진짜 상태는 game-session 인메모리이고 이건 matchmaking이 읽는 projection이다.
@@ -235,13 +236,29 @@ export function roomHashKey(roomId: string): string {
 export const JOINABLE_ROOMS_SET_KEY = "rooms:joinable";
 
 /**
- * room:{roomId} Hash의 만료 시간.
- * game-session이 크래시하거나 정리 콜백이 실패해도 이 시간이 지나면 방 기록이 스스로 사라진다.
+ * game-session이 Redis에 남기는 사본(방, replica 부하)의 만료 시간.
+ * 프로세스가 크래시하거나 정리 콜백이 실패해도 이 시간이 지나면 기록이 스스로 사라진다.
  */
-export const ROOM_PROJECTION_TTL_SECONDS = 60;
+export const PROJECTION_TTL_SECONDS = 60;
 
-/** game-session이 살아있는 방의 TTL을 갱신하는 주기. TTL보다 충분히 짧아야 한다. */
-export const ROOM_HEARTBEAT_INTERVAL_MS = 20_000;
+/** game-session이 사본의 TTL을 갱신하는 주기. TTL보다 충분히 짧아야 한다. */
+export const PROJECTION_HEARTBEAT_INTERVAL_MS = 20_000;
+
+/**
+ * game-session replica가 자기 부하를 알리는 키.
+ * matchmaking이 새 방을 어느 replica에 둘지(least-connections) 고를 때 읽는다.
+ * 키가 없으면 그 replica는 죽은 것으로 본다.
+ */
+export function sessionLoadKey(port: number): string {
+  return `session:${port}`;
+}
+
+/** replica 하나의 현재 부하. 값의 주인은 game-session 인메모리이고 Redis는 그 사본이다. */
+export interface SessionLoad {
+  port: number;
+  rooms: number;
+  connections: number;
+}
 
 // RabbitMQ 이벤트 (game-session - results-worker)
 //   게임 종료 시 발행. worker가 소비해 user DB에 전적을 영속화한다.

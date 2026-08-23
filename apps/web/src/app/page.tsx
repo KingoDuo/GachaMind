@@ -10,14 +10,25 @@ export default function Home() {
   const [joinRoomId, setJoinRoomId] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [isMatching, setIsMatching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // 배정 가능한 game-session이 하나도 없으면 matchmaking이 503을 준다.
+  async function assignAndEnter(path: string) {
+    setError(null);
+    const res = await fetch(path, { method: "POST" });
+    if (!res.ok) {
+      setError("지금은 들어갈 수 있는 게임 서버가 없습니다. 잠시 후 다시 시도해주세요.");
+      return;
+    }
+    const { roomId } = await res.json();
+    router.push(`/room/${roomId}?nick=${encodeURIComponent(nickname)}`);
+  }
 
   async function handleCreateRoom() {
     if (!nickname.trim()) return;
     setIsCreating(true);
     try {
-      const res = await fetch("/api/rooms", { method: "POST" });
-      const { roomId } = await res.json();
-      router.push(`/room/${roomId}?nick=${encodeURIComponent(nickname)}`);
+      await assignAndEnter("/api/rooms");
     } finally {
       setIsCreating(false);
     }
@@ -28,9 +39,7 @@ export default function Home() {
     if (!nickname.trim()) return;
     setIsMatching(true);
     try {
-      const res = await fetch("/api/rooms/match", { method: "POST" });
-      const { roomId } = await res.json();
-      router.push(`/room/${roomId}?nick=${encodeURIComponent(nickname)}`);
+      await assignAndEnter("/api/rooms/match");
     } finally {
       setIsMatching(false);
     }
@@ -81,6 +90,12 @@ export default function Home() {
             {isMatching ? "매칭 중..." : "빠른 시작"}
           </button>
         </div>
+
+        {error && (
+          <p className="border border-[#aca899] bg-[#ffffe1] px-2 py-1 text-xs text-red-700">
+            {error}
+          </p>
+        )}
 
         <div className="my-1 flex items-center gap-3 text-xs text-muted">
           <span className="h-0.5 flex-1 border-t border-b border-t-[#aca899] border-b-white" />

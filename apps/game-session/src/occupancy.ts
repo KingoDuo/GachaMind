@@ -1,9 +1,11 @@
 import {
   JOINABLE_ROOMS_SET_KEY,
-  ROOM_HEARTBEAT_INTERVAL_MS,
-  ROOM_PROJECTION_TTL_SECONDS,
+  PROJECTION_HEARTBEAT_INTERVAL_MS,
+  PROJECTION_TTL_SECONDS,
   roomHashKey,
+  sessionLoadKey,
   type RoomProjection,
+  type SessionLoad,
 } from "@gachamind/shared";
 import { PORT } from "./config.js";
 import { redis } from "./redis.js";
@@ -25,7 +27,7 @@ export async function syncOccupancy(room: Room): Promise<void> {
     const pipeline = redis.pipeline();
     pipeline.hset(roomHashKey(room.id), projection);
     // 갱신할 때마다 TTL을 다시 건다. 프로세스가 죽으면 갱신이 멈추고 방 기록도 만료된다.
-    pipeline.expire(roomHashKey(room.id), ROOM_PROJECTION_TTL_SECONDS);
+    pipeline.expire(roomHashKey(room.id), PROJECTION_TTL_SECONDS);
     // 정원이 차면 난입 후보에서 빼고, 자리가 나면 다시 넣는다.
     if (room.isFull) {
       pipeline.srem(JOINABLE_ROOMS_SET_KEY, room.id);
@@ -35,6 +37,37 @@ export async function syncOccupancy(room: Room): Promise<void> {
     await pipeline.exec();
   } catch (err) {
     console.error(`[occupancy] sync failed for ${room.id}:`, err);
+  }
+}
+
+/**
+ * 이 replica의 부하를 알린다. matchmaking이 새 방을 어디에 둘지 고르는 근거다.
+ * 방이 하나도 없어도 반드시 보고해야 한다. 보고하지 않으면 죽은 replica로 간주돼 아무 방도 배정받지 못한다.
+ */
+export async function publishSessionLoad(roomManager: RoomManager): Promise<void> {
+  const load: SessionLoad = {
+    port: PORT,
+    rooms: roomManager.roomCount,
+    connections: roomManager.totalConnections,
+  };
+
+  try {
+    await redis
+      .pipeline()
+      .hset(sessionLoadKey(PORT), load)
+      .expire(sessionLoadKey(PORT), PROJECTION_TTL_SECONDS)
+      .exec();
+  } catch (err) {
+    console.error(`[occupancy] session load publish failed:`, err);
+  }
+}
+
+/** 정상 종료 시 부하 보고를 지운다. TTL을 기다리지 않고 즉시 배정 대상에서 빠진다. */
+export async function clearSessionLoad(): Promise<void> {
+  try {
+    await redis.del(sessionLoadKey(PORT));
+  } catch (err) {
+    console.error(`[occupancy] session load clear failed:`, err);
   }
 }
 
@@ -55,13 +88,14 @@ export async function isRoomAssignedHere(roomId: string): Promise<boolean> {
 }
 
 /**
- * 살아있는 방들의 TTL을 주기적으로 갱신한다.
+ * 살아있는 방과 이 replica의 부하 보고를 주기적으로 갱신한다.
  * 조용한 방(입퇴장이 없는 방)도 만료되지 않게 하는 것이 목적이다.
  */
-export function startOccupancyHeartbeat(roomManager: RoomManager): NodeJS.Timeout {
+export function startProjectionHeartbeat(roomManager: RoomManager): NodeJS.Timeout {
   const timer = setInterval(() => {
     for (const room of roomManager.allRooms) void syncOccupancy(room);
-  }, ROOM_HEARTBEAT_INTERVAL_MS);
+    void publishSessionLoad(roomManager);
+  }, PROJECTION_HEARTBEAT_INTERVAL_MS);
   // 하트비트 때문에 프로세스가 종료되지 못하는 일이 없도록 한다.
   timer.unref();
   return timer;

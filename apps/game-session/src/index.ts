@@ -4,7 +4,13 @@ import type { ClientToServerMessage, StrokeSegment } from "@gachamind/shared";
 import { RoomManager, type Room } from "./room.js";
 import { handleGuess, handlePlayerLeftDuringGame, startGame } from "./game.js";
 import { PORT } from "./config.js";
-import { isRoomAssignedHere, startOccupancyHeartbeat, syncOccupancy } from "./occupancy.js";
+import {
+  clearSessionLoad,
+  isRoomAssignedHere,
+  publishSessionLoad,
+  startProjectionHeartbeat,
+  syncOccupancy,
+} from "./occupancy.js";
 import { notifyRoomClosed } from "./matchmaking.js";
 import { redis } from "./redis.js";
 
@@ -66,6 +72,7 @@ async function handleJoin(
   if (room.phase === "playing") room.drawerQueue.push(playerId);
 
   void syncOccupancy(room);
+  void publishSessionLoad(roomManager);
 
   // 입장자에게는 현재 상태 스냅샷, 나머지에게는 입장 사실만 보낸다.
   room.send(playerId, {
@@ -195,9 +202,12 @@ function handleClose(state: ConnectionState): void {
   } else {
     void syncOccupancy(room);
   }
+  void publishSessionLoad(roomManager);
 }
 
-startOccupancyHeartbeat(roomManager);
+// 방이 없어도 배정 대상이 되려면 뜨자마자 한 번 보고해야 한다.
+void publishSessionLoad(roomManager);
+startProjectionHeartbeat(roomManager);
 
 wss.on("connection", (socket: WebSocket) => {
   const state: ConnectionState = { joinedRoomId: null, playerId: null, joining: false };
@@ -213,6 +223,7 @@ wss.on("connection", (socket: WebSocket) => {
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`[game-session] ${signal}: closing ${roomManager.roomCount} room(s)`);
   wss.close();
+  await clearSessionLoad();
   await Promise.all(roomManager.allRooms.map((room) => notifyRoomClosed(room.id)));
   await redis.quit();
   process.exit(0);
