@@ -23,6 +23,8 @@ export class Room {
   readonly players = new Map<string, Player>();
 
   phase: GamePhase = "waiting";
+  /** 현재 진행 중인 게임 한 판의 id. 종료 이벤트의 멱등 키로 쓴다. */
+  gameId: string | null = null;
   round = 0;
   totalRounds = 0;
   drawerId: string | null = null;

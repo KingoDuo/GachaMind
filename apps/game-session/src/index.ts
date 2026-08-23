@@ -12,6 +12,7 @@ import {
   syncOccupancy,
 } from "./occupancy.js";
 import { notifyRoomClosed } from "./matchmaking.js";
+import { closeEventPublisher } from "./events.js";
 import { redis } from "./redis.js";
 
 /** 채팅 한 줄 최대 길이. 서버가 authority이므로 클라이언트 입력은 여기서 자른다. */
@@ -223,6 +224,7 @@ wss.on("connection", (socket: WebSocket) => {
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`[game-session] ${signal}: closing ${roomManager.roomCount} room(s)`);
   wss.close();
+  await closeEventPublisher();
   await clearSessionLoad();
   await Promise.all(roomManager.allRooms.map((room) => notifyRoomClosed(room.id)));
   await redis.quit();

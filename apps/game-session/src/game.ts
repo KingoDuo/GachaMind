@@ -1,10 +1,13 @@
+import { randomUUID } from "node:crypto";
 import {
   MAX_ROUNDS,
   MIN_PLAYERS_TO_START,
   ROUND_DURATION_MS,
   normalizeAnswer,
+  type GameResultPlayer,
   type RoundStartedMessage,
 } from "@gachamind/shared";
+import { publishGameEvent } from "./events.js";
 import type { Player, Room } from "./room.js";
 import { pickWord } from "./words.js";
 
@@ -36,6 +39,7 @@ export function startGame(room: Room): void {
 
   for (const player of room.players.values()) player.score = 0;
   room.phase = "playing";
+  room.gameId = randomUUID();
   room.round = 0;
   room.usedWords = [];
   room.totalRounds = Math.min(room.size, MAX_ROUNDS);
@@ -105,15 +109,49 @@ export function endRound(room: Room): void {
   }, ROUND_INTERMISSION_MS);
 }
 
+/** 점수순 등수를 매긴다. 동점이면 같은 등수를 주고, 다음 등수는 인원수만큼 건너뛴다. */
+function toResultPlayers(room: Room): GameResultPlayer[] {
+  const sorted = room.summaries.sort((a, b) => b.score - a.score);
+
+  let rank = 0;
+  let previousScore: number | null = null;
+
+  return sorted.map((player, index) => {
+    if (previousScore === null || player.score !== previousScore) {
+      rank = index + 1;
+      previousScore = player.score;
+    }
+    return { playerId: player.id, nickname: player.nickname, score: player.score, rank };
+  });
+}
+
 export function endGame(room: Room): void {
+  // 호출 경로가 여러 개라, 이미 끝난 게임을 두 번 발행하지 않도록 여기서 한 번 더 막는다.
+  if (room.phase !== "playing") return;
   room.clearRoundTimer();
+
+  const gameId = room.gameId;
+  const roundsPlayed = room.round;
+
   room.phase = "ended";
+  room.gameId = null;
   room.drawerId = null;
   room.word = null;
   room.roundEndsAt = null;
   room.drawerQueue = [];
   room.broadcast({ type: "game-ended", players: room.summaries });
-  // TODO: RabbitMQ로 game-finished 발행 (results-worker가 전적 영속화).
+
+  // 전적 영속화는 results-worker 몫이다. 발행만 하고 결과를 기다리지 않는다.
+  if (gameId) {
+    void publishGameEvent({
+      type: "game-finished",
+      gameId,
+      roomId: room.id,
+      finishedAt: new Date().toISOString(),
+      roundsPlayed,
+      players: toResultPlayers(room),
+    });
+  }
 }
 
 /**

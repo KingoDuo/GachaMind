@@ -265,11 +265,33 @@ export interface SessionLoad {
 
 export const GAME_EVENTS_QUEUE = "game.events";
 
+/** 게임 한 판의 플레이어별 결과. */
+export interface GameResultPlayer {
+  playerId: string;
+  nickname: string;
+  score: number;
+  /** 1등부터. 동점이면 같은 등수를 준다. */
+  rank: number;
+}
+
 export interface GameFinishedEvent {
   type: "game-finished";
+  /**
+   * 게임 한 판의 고유 id.
+   * RabbitMQ는 at-least-once라 같은 메시지가 두 번 올 수 있다.
+   * worker가 이 값으로 이미 저장한 게임인지 판별해 중복 적재를 막는다.
+   */
+  gameId: string;
   roomId: string;
-  finishedAt: string; // ISO8601
-  // TODO: 실제 게임 결과 스키마(플레이어별 점수 등)를 게임 로직 구현 시 채운다.
+  /** ISO8601 */
+  finishedAt: string;
+  /** 실제로 진행된 라운드 수. 인원이 빠져 조기 종료되면 계획보다 적다. */
+  roundsPlayed: number;
+  /**
+   * 게임이 끝나는 시점에 방에 남아 있던 플레이어만 담긴다.
+   * 중간에 나간 사람의 점수는 인메모리에서 함께 사라지므로 기록되지 않는다.
+   */
+  players: GameResultPlayer[];
 }
 
 export type GameEvent = GameFinishedEvent;

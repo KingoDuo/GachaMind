@@ -18,6 +18,8 @@ services:
       PORT: "4001"
       MATCHMAKING_URL: http://matchmaking:4000
       REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://rabbitmq:5672
+    depends_on: [redis, rabbitmq]
 
   game-session-2:
     build: { context: .., dockerfile: apps/game-session/Dockerfile }
@@ -26,6 +28,8 @@ services:
       PORT: "4002"
       MATCHMAKING_URL: http://matchmaking:4000
       REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://rabbitmq:5672
+    depends_on: [redis, rabbitmq]
 
   # ── 내부: web/서비스만 호출 → 호스트 포트 불필요 ──
   matchmaking:
