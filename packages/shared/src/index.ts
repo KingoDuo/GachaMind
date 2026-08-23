@@ -126,6 +126,12 @@ export interface RoomFullMessage {
   roomId: string;
 }
 
+/** 배정된 적 없는 방 코드로 접속했을 때. 유령 방이 생기지 않도록 game-session이 입장을 거절한다. */
+export interface RoomNotFoundMessage {
+  type: "room-not-found";
+  roomId: string;
+}
+
 export interface ChatBroadcastMessage {
   type: "chat";
   playerId: string;
@@ -191,6 +197,7 @@ export type ServerToClientMessage =
   | PlayerJoinedMessage
   | PlayerLeftMessage
   | RoomFullMessage
+  | RoomNotFoundMessage
   | ChatBroadcastMessage
   | SystemNoticeMessage
   | DrawBroadcastMessage
@@ -226,6 +233,15 @@ export function roomHashKey(roomId: string): string {
 }
 
 export const JOINABLE_ROOMS_SET_KEY = "rooms:joinable";
+
+/**
+ * room:{roomId} Hash의 만료 시간.
+ * game-session이 크래시하거나 정리 콜백이 실패해도 이 시간이 지나면 방 기록이 스스로 사라진다.
+ */
+export const ROOM_PROJECTION_TTL_SECONDS = 60;
+
+/** game-session이 살아있는 방의 TTL을 갱신하는 주기. TTL보다 충분히 짧아야 한다. */
+export const ROOM_HEARTBEAT_INTERVAL_MS = 20_000;
 
 // RabbitMQ 이벤트 (game-session - results-worker)
 //   게임 종료 시 발행. worker가 소비해 user DB에 전적을 영속화한다.

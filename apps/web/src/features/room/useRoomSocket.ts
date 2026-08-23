@@ -160,6 +160,11 @@ export function useRoomSocket(roomId: string, nickname: string) {
             setStatus("room-full");
             break;
 
+          // BFF 조회를 건너뛰고 붙었거나, 조회 직후 방이 닫힌 경우 서버가 되돌려준다.
+          case "room-not-found":
+            setStatus("not-found");
+            break;
+
           case "chat":
             pushFeed({
               kind: "chat",

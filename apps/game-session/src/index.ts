@@ -4,7 +4,8 @@ import type { ClientToServerMessage, StrokeSegment } from "@gachamind/shared";
 import { RoomManager, type Room } from "./room.js";
 import { handleGuess, handlePlayerLeftDuringGame, startGame } from "./game.js";
 import { PORT } from "./config.js";
-import { clearOccupancy, syncOccupancy } from "./occupancy.js";
+import { isRoomAssignedHere, startOccupancyHeartbeat, syncOccupancy } from "./occupancy.js";
+import { notifyRoomClosed } from "./matchmaking.js";
 import { redis } from "./redis.js";
 
 /** 채팅 한 줄 최대 길이. 서버가 authority이므로 클라이언트 입력은 여기서 자른다. */
@@ -19,17 +20,37 @@ console.log(`[game-session] pid=${process.pid} listening on ${PORT}`);
 interface ConnectionState {
   joinedRoomId: string | null;
   playerId: string | null;
+  /** 방 배정 확인을 기다리는 중. 그 사이 도착한 join을 중복 처리하지 않으려고 둔다. */
+  joining: boolean;
 }
 
-function handleJoin(
+async function handleJoin(
   socket: WebSocket,
   state: ConnectionState,
   message: Extract<ClientToServerMessage, { type: "join" }>,
-): void {
-  if (state.joinedRoomId) return;
+): Promise<void> {
+  if (state.joinedRoomId || state.joining) return;
+  state.joining = true;
 
-  const room = roomManager.getOrCreate(message.roomId);
+  // 이미 이 프로세스가 들고 있는 방이면 확인이 필요 없다(가장 흔한 경로라 await 없이 지나간다).
+  let room = roomManager.get(message.roomId);
+  if (!room) {
+    if (!(await isRoomAssignedHere(message.roomId))) {
+      state.joining = false;
+      socket.send(JSON.stringify({ type: "room-not-found", roomId: message.roomId }));
+      socket.close();
+      return;
+    }
+    // 확인을 기다리는 동안 끊겼으면 죽은 소켓을 방에 넣지 않는다.
+    if (socket.readyState !== socket.OPEN) {
+      state.joining = false;
+      return;
+    }
+    room = roomManager.getOrCreate(message.roomId);
+  }
+
   if (room.isFull) {
+    state.joining = false;
     socket.send(JSON.stringify({ type: "room-full", roomId: room.id }));
     socket.close();
     return;
@@ -73,6 +94,7 @@ function handleJoin(
   );
   room.notice(`${nickname}님이 입장했습니다.`);
   console.log(`[room ${room.id}] ${nickname} joined (${room.size})`);
+  state.joining = false;
 }
 
 function handleChat(room: Room, playerId: string, text: string): void {
@@ -124,7 +146,7 @@ function handleMessage(socket: WebSocket, state: ConnectionState, raw: RawData):
   }
 
   if (message.type === "join") {
-    handleJoin(socket, state, message);
+    void handleJoin(socket, state, message);
     return;
   }
 
@@ -168,16 +190,17 @@ function handleClose(state: ConnectionState): void {
 
   handlePlayerLeftDuringGame(room, state.playerId);
 
-  // TODO: 빈 방이면 matchmaking에 정리 콜백 통지.
   if (roomManager.removeIfEmpty(room.id)) {
-    void clearOccupancy(room.id);
+    void notifyRoomClosed(room.id);
   } else {
     void syncOccupancy(room);
   }
 }
 
+startOccupancyHeartbeat(roomManager);
+
 wss.on("connection", (socket: WebSocket) => {
-  const state: ConnectionState = { joinedRoomId: null, playerId: null };
+  const state: ConnectionState = { joinedRoomId: null, playerId: null, joining: false };
 
   socket.on("message", (raw) => handleMessage(socket, state, raw));
   socket.on("close", () => handleClose(state));
@@ -188,9 +211,9 @@ wss.on("connection", (socket: WebSocket) => {
  * Redis 사본을 지우지 않으면 매칭이 죽은 방으로 사람을 계속 보낸다.
  */
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
-  console.log(`[game-session] ${signal}: clearing ${roomManager.roomCount} room projection(s)`);
+  console.log(`[game-session] ${signal}: closing ${roomManager.roomCount} room(s)`);
   wss.close();
-  await Promise.all(roomManager.roomIds.map((roomId) => clearOccupancy(roomId)));
+  await Promise.all(roomManager.allRooms.map((room) => notifyRoomClosed(room.id)));
   await redis.quit();
   process.exit(0);
 }
