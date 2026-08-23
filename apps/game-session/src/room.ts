@@ -145,6 +145,10 @@ export class RoomManager {
     return false;
   }
 
+  get roomIds(): string[] {
+    return [...this.rooms.keys()];
+  }
+
   get roomCount(): number {
     return this.rooms.size;
   }

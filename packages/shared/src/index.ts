@@ -210,6 +210,17 @@ export function normalizeAnswer(text: string): string {
 //   room:{roomId}   Hash: { port, capacity, playerCount }
 //   rooms:joinable  Set:  정원이 남은 roomId들
 
+/**
+ * Redis에 기록되는 방 사본. 진짜 상태는 game-session 인메모리이고 이건 matchmaking이 읽는 projection이다.
+ * game-session이 갱신하고, matchmaking은 배정 후보를 고를 때만 읽는다.
+ */
+export interface RoomProjection {
+  /** 이 방이 열려 있는 game-session 포트. */
+  port: number;
+  capacity: number;
+  playerCount: number;
+}
+
 export function roomHashKey(roomId: string): string {
   return `room:${roomId}`;
 }

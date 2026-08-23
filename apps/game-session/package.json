@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@gachamind/shared": "workspace:*",
+    "ioredis": "^5.11.1",
     "ws": "^8.18.0"
   },
   "devDependencies": {

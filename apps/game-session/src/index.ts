@@ -3,8 +3,9 @@ import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import type { ClientToServerMessage, StrokeSegment } from "@gachamind/shared";
 import { RoomManager, type Room } from "./room.js";
 import { handleGuess, handlePlayerLeftDuringGame, startGame } from "./game.js";
-
-const PORT = Number(process.env.PORT ?? 4001);
+import { PORT } from "./config.js";
+import { clearOccupancy, syncOccupancy } from "./occupancy.js";
+import { redis } from "./redis.js";
 
 /** 채팅 한 줄 최대 길이. 서버가 authority이므로 클라이언트 입력은 여기서 자른다. */
 const MAX_CHAT_LENGTH = 200;
@@ -43,7 +44,7 @@ function handleJoin(
   // 게임 중에 들어온 사람도 다음 라운드부터는 출제할 수 있게 순번 뒤에 붙인다.
   if (room.phase === "playing") room.drawerQueue.push(playerId);
 
-  // TODO: Redis occupancy 동기화 + matchmaking 연동 (방 존재/포트 등록).
+  void syncOccupancy(room);
 
   // 입장자에게는 현재 상태 스냅샷, 나머지에게는 입장 사실만 보낸다.
   room.send(playerId, {
@@ -168,7 +169,11 @@ function handleClose(state: ConnectionState): void {
   handlePlayerLeftDuringGame(room, state.playerId);
 
   // TODO: 빈 방이면 matchmaking에 정리 콜백 통지.
-  roomManager.removeIfEmpty(room.id);
+  if (roomManager.removeIfEmpty(room.id)) {
+    void clearOccupancy(room.id);
+  } else {
+    void syncOccupancy(room);
+  }
 }
 
 wss.on("connection", (socket: WebSocket) => {
@@ -177,3 +182,18 @@ wss.on("connection", (socket: WebSocket) => {
   socket.on("message", (raw) => handleMessage(socket, state, raw));
   socket.on("close", () => handleClose(state));
 });
+
+/**
+ * 프로세스가 내려가면 이 프로세스가 들고 있던 방도 같이 사라진다.
+ * Redis 사본을 지우지 않으면 매칭이 죽은 방으로 사람을 계속 보낸다.
+ */
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
+  console.log(`[game-session] ${signal}: clearing ${roomManager.roomCount} room projection(s)`);
+  wss.close();
+  await Promise.all(roomManager.roomIds.map((roomId) => clearOccupancy(roomId)));
+  await redis.quit();
+  process.exit(0);
+}
+
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
