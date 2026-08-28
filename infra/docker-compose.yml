@@ -1,18 +1,21 @@
-# build context는 repo 루트(..). 서비스 간엔 컨테이너명(redis/postgres/rabbitmq…)으로 통신.
+# build context는 repo 루트(..). 모든 서비스가 루트 Dockerfile 하나를 쓰고 SERVICE 인자로 어느 앱인지 정한다.
+# 서비스 간엔 컨테이너명(redis/postgres/rabbitmq…)으로 통신.
 # 휘발성 데이터 원칙에 따라 볼륨은 두지 않는다(컨테이너 내리면 데이터 소멸).
 name: gachamind
 
 services:
   # ── 엣지: 브라우저가 직접 접근 → 호스트 포트 공개 ──
   web:
-    build: { context: .., dockerfile: apps/web/Dockerfile }
+    build: { context: .., args: { SERVICE: web } }
+    image: gachamind/web:local
     ports: ["3000:3000"]
     environment:
       MATCHMAKING_URL: http://matchmaking:4000
     depends_on: [matchmaking]
 
   game-session-1:
-    build: { context: .., dockerfile: apps/game-session/Dockerfile }
+    build: { context: .., args: { SERVICE: game-session } }
+    image: gachamind/game-session:local
     ports: ["4001:4001"]
     environment:
       PORT: "4001"
@@ -22,7 +25,8 @@ services:
     depends_on: [redis, rabbitmq]
 
   game-session-2:
-    build: { context: .., dockerfile: apps/game-session/Dockerfile }
+    # game-session-1이 빌드한 이미지를 그대로 쓴다(replica는 env만 다르다).
+    image: gachamind/game-session:local
     ports: ["4002:4002"]
     environment:
       PORT: "4002"
@@ -33,7 +37,8 @@ services:
 
   # ── 내부: web/서비스만 호출 → 호스트 포트 불필요 ──
   matchmaking:
-    build: { context: .., dockerfile: apps/matchmaking/Dockerfile }
+    build: { context: .., args: { SERVICE: matchmaking } }
+    image: gachamind/matchmaking:local
     environment:
       PORT: "4000"
       REDIS_URL: redis://redis:6379
@@ -41,14 +46,16 @@ services:
     depends_on: [redis]
 
   user:
-    build: { context: .., dockerfile: apps/user/Dockerfile }
+    build: { context: .., args: { SERVICE: user } }
+    image: gachamind/user:local
     environment:
       PORT: "4010"
       DATABASE_URL: postgresql://gachamind:gachamind@postgres:5432/gachamind
     depends_on: [postgres]
 
   results-worker:
-    build: { context: .., dockerfile: apps/results-worker/Dockerfile }
+    build: { context: .., args: { SERVICE: results-worker } }
+    image: gachamind/results-worker:local
     environment:
       RABBITMQ_URL: amqp://rabbitmq:5672
       DATABASE_URL: postgresql://gachamind:gachamind@postgres:5432/gachamind
