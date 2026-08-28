@@ -84,6 +84,7 @@ packages/
   shared/          # 서비스 간 계약 (메시지 타입, Redis 키, MQ 이벤트 스키마)
 infra/
   docker-compose.yml   # redis + postgres + rabbitmq + 5개 서비스
+Dockerfile         # 5개 서비스 공용. SERVICE 빌드 인자로 어느 앱의 이미지인지 정한다
 ```
 
 ## 실행 방법
@@ -98,7 +99,7 @@ pnpm dev:web           # dev:web / dev:matchmaking / dev:game-session / dev:user
 ./docker.sh start      # 5개 서비스 + 인프라 빌드/기동  (내리기: ./docker.sh stop)
 ```
 도커 오케스트레이션은 루트 `docker.sh`로 일원화(`start`/`rebuild`/`stop`/`restart`/`infra`/`logs`/`ps`/`clean`). `./docker.sh help` 참고.
-Docker build context는 repo 루트다(shared + lockfile 때문). 서비스 간엔 컨테이너명(`redis`/`postgres`/`rabbitmq`/`matchmaking`)으로 통신한다. 환경변수 예시는 `.env.example` 참고.
+Docker 이미지는 루트 `Dockerfile` 하나로 만든다(`--build-arg SERVICE=<앱이름>`, 멀티스테이지 → 서비스별로 그 앱의 prod 의존성만 든 얇은 이미지). build context는 repo 루트다(shared + lockfile 때문). 서비스 간엔 컨테이너명(`redis`/`postgres`/`rabbitmq`/`matchmaking`)으로 통신한다. 환경변수 예시는 `.env.example` 참고.
 
 > **주의:** pnpm 11.10은 Node 22.13+를 요구한다(`packageManager` 핀).
 

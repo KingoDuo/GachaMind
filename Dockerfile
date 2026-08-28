@@ -13,15 +13,16 @@
 #   manifests  lockfile + 모든 package.json. 소스는 없다 → 의존성 설치 레이어가 소스 변경에 무관하게 캐시된다.
 #   build      선택한 앱의 전체 의존성(devDeps 포함) 설치 + 빌드(next build / nest build).
 #   runtime    선택한 앱의 프로덕션 의존성만 설치 + build 결과물 복사. 최종 이미지.
+#
+# pnpm의 콘텐츠 저장소(store)와 레지스트리 메타데이터 캐시는 --mount=type=cache 로 빌더에만 두고
+# 이미지에는 넣지 않는다. 안 그러면 런타임 이미지에 수백 MB의 캐시가 딸려 들어간다.
 
 ARG NODE_VERSION=22
 
 # ── 공통 베이스 ──────────────────────────────────────────────────────────────
 FROM node:${NODE_VERSION}-alpine AS base
 # packageManager 핀(pnpm@11.10.0)과 같은 버전을 쓴다. 다르면 pnpm이 핀 버전을 다시 받으려 한다.
-RUN npm i -g pnpm@11.10.0
-# pnpm 콘텐츠 저장소 위치를 고정해서 아래 --mount=type=cache 와 경로를 맞춘다.
-ENV npm_config_store_dir=/pnpm/store
+RUN npm i -g pnpm@11.10.0 && rm -rf /root/.npm
 WORKDIR /app
 
 # ── 매니페스트만 ─────────────────────────────────────────────────────────────
@@ -40,7 +41,8 @@ COPY apps/results-worker/package.json apps/results-worker/
 FROM manifests AS build
 ARG SERVICE
 # "${SERVICE}..." = 그 앱 + 그 앱이 의존하는 workspace 패키지들(shared)만 설치.
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+    --mount=type=cache,id=pnpm-cache,target=/root/.cache/pnpm \
     pnpm install --frozen-lockfile --filter "${SERVICE}..."
 COPY packages/shared packages/shared
 COPY apps/${SERVICE} apps/${SERVICE}
@@ -53,7 +55,8 @@ RUN rm -rf "apps/${SERVICE}/node_modules" "apps/${SERVICE}/.next/cache" packages
 FROM manifests AS runtime
 ARG SERVICE
 ENV NODE_ENV=production
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+    --mount=type=cache,id=pnpm-cache,target=/root/.cache/pnpm \
     pnpm install --frozen-lockfile --prod --filter "${SERVICE}..."
 # 소스/빌드 결과물을 올린다. build 스테이지에서 node_modules를 지웠으므로 위에서 설치한 prod 링크는 그대로 남는다.
 COPY --from=build /app/packages/shared packages/shared
