@@ -8,6 +8,7 @@ import {
   type RoundStartedMessage,
 } from "@gachamind/shared";
 import { publishGameEvent } from "./events.js";
+import { syncOccupancy } from "./occupancy.js";
 import type { Player, Room } from "./room.js";
 import { pickWord } from "./words.js";
 
@@ -46,6 +47,8 @@ export function startGame(room: Room): void {
   room.drawerQueue = shuffle([...room.players.keys()]).slice(0, room.totalRounds);
 
   room.broadcast({ type: "game-started", totalRounds: room.totalRounds });
+  // 로비 목록이 "게임 중"으로 바뀌는 시점. 하트비트(20초)를 기다리면 목록이 뒤늦게 따라온다.
+  void syncOccupancy(room);
   startRound(room);
 }
 
@@ -140,6 +143,7 @@ export function endGame(room: Room): void {
   room.roundEndsAt = null;
   room.drawerQueue = [];
   room.broadcast({ type: "game-ended", players: room.summaries });
+  void syncOccupancy(room);
 
   // 전적 영속화는 results-worker 몫이다. 발행만 하고 결과를 기다리지 않는다.
   if (gameId) {

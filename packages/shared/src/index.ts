@@ -11,6 +11,11 @@ export interface RoomAssignment {
 /** 새 방을 만들지(create), 진행 중인 방에 난입할지(match) */
 export type AssignMode = "create" | "match";
 
+/** 로비가 받는 방 목록 응답. */
+export interface RoomListResponse {
+  rooms: RoomSummary[];
+}
+
 // 게임 규칙 상수. 서버가 authority지만 클라이언트도 진행바 계산에 쓴다.
 
 /** 방 하나의 최대 인원. matchmaking(Redis 기록)과 game-session(Room 정원)이 값을 공유한다. */
@@ -77,11 +82,7 @@ export interface StartGameMessage {
 }
 
 export type ClientToServerMessage =
-  | JoinRoomMessage
-  | ChatInputMessage
-  | DrawInputMessage
-  | DrawClearInputMessage
-  | StartGameMessage;
+  JoinRoomMessage | ChatInputMessage | DrawInputMessage | DrawClearInputMessage | StartGameMessage;
 
 // 서버가 보내는 메시지
 
@@ -213,6 +214,50 @@ export function normalizeAnswer(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, "");
 }
 
+// 방 코드 (사람이 부르고 받아 적는 값)
+
+/**
+ * 방 코드 글자 집합. Crockford Base32(0-9 + A-Z에서 I·L·O·U 제외).
+ * 눈으로 헷갈리는 글자를 빼서 받아 적기 쉽게 하고, 크기가 32라 무작위 바이트를 편향 없이 잘라 쓸 수 있다.
+ */
+export const ROOM_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/** 방 코드 길이. 5자리면 32^5 ≈ 3,350만 가지라 동시에 열려 있는 방 규모에선 충돌이 사실상 없다. */
+export const ROOM_CODE_LENGTH = 5;
+
+/**
+ * 새 방 코드를 만든다. 주인은 matchmaking이고, 충돌은 Redis 선점(HSETNX)으로 최종 판정한다.
+ * getRandomValues는 브라우저·Node 양쪽에 있어서 shared에서 그대로 쓸 수 있다.
+ */
+export function generateRoomCode(length: number = ROOM_CODE_LENGTH): string {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+
+  let code = "";
+  // 알파벳이 32개라 하위 5비트만 쓰면 모든 글자가 같은 확률로 나온다.
+  for (const byte of bytes) code += ROOM_CODE_ALPHABET[byte & 31];
+  return code;
+}
+
+/**
+ * 사용자가 입력한 방 코드를 정규 형태로 맞춘다.
+ * 대소문자, 사이에 낀 공백·하이픈, 그리고 O/0·I/L/1 오타를 흡수한다.
+ * 코드를 받는 모든 입구(web 입장 폼, matchmaking 조회, game-session join)에서 통과시켜야
+ * 같은 방이 표기만 다른 코드로 갈라지지 않는다.
+ */
+export function normalizeRoomCode(input: string): string {
+  return input
+    .toUpperCase()
+    .replace(/[^0-9A-Z]/g, "")
+    .replace(/[IL]/g, "1")
+    .replace(/O/g, "0");
+}
+
+/** 정규화까지 마친 코드가 방 코드 형식인지. 형식이 틀리면 Redis를 찌를 필요도 없다. */
+export function isRoomCode(code: string): boolean {
+  return code.length === ROOM_CODE_LENGTH && [...code].every((c) => ROOM_CODE_ALPHABET.includes(c));
+}
+
 // Redis 키 규칙 (matchmaking - game-session 공유 상태)
 //   room:{roomId}   Hash: { port, capacity, playerCount }
 //   rooms:joinable  Set:  정원이 남은 roomId들
@@ -227,6 +272,13 @@ export interface RoomProjection {
   port: number;
   capacity: number;
   playerCount: number;
+  /** 로비 목록에서 "대기 중/게임 중"을 구분하려고 같이 싣는다. */
+  phase: GamePhase;
+}
+
+/** 로비 방 목록의 한 줄. matchmaking이 projection을 모아 web에 준다. */
+export interface RoomSummary extends RoomProjection {
+  roomId: string;
 }
 
 export function roomHashKey(roomId: string): string {

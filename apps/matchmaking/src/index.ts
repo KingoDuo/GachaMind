@@ -1,13 +1,17 @@
-import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import {
   DEFAULT_ROOM_CAPACITY,
   JOINABLE_ROOMS_SET_KEY,
   PROJECTION_TTL_SECONDS,
+  generateRoomCode,
+  normalizeRoomCode,
   roomHashKey,
   sessionLoadKey,
   type AssignMode,
+  type GamePhase,
   type RoomAssignment,
+  type RoomListResponse,
+  type RoomSummary,
 } from "@gachamind/shared";
 import { redis } from "./redis.js";
 
@@ -21,6 +25,12 @@ const GAME_SESSION_PORTS = (process.env.GAME_SESSION_PORTS ?? "4001")
 
 /** 난입 후보를 한 번에 뽑아보는 개수. 죽은 방을 만나도 왕복 없이 다음 후보로 넘어가려고 여러 개 뽑는다. */
 const JOINABLE_SAMPLE_SIZE = 10;
+
+/** 로비 목록에 한 번에 실어 보내는 방 수 상한. 이보다 방이 많아지면 정렬 인덱스(ZSET)와 페이지네이션이 필요하다. */
+const ROOM_LIST_LIMIT = 50;
+
+/** 방 코드 선점 재시도 횟수. 이미 쓰이는 코드를 뽑았을 때만 소모된다. */
+const ROOM_CODE_ATTEMPTS = 5;
 
 const app = Fastify({ logger: false });
 
@@ -53,19 +63,19 @@ async function pickLeastLoadedPort(): Promise<number | null> {
 }
 
 /**
- * 진행 중인 방 하나를 난입 대상으로 고른다.
- * rooms:joinable은 Set이라 멤버 단위 TTL이 없어서, 크래시로 사라진 방의 흔적이 남는다.
- * 그래서 후보를 확인하면서 죽은 방을 그때그때 인덱스에서 지운다(읽는 쪽 지연 정리).
+ * 후보 roomId들의 사본을 읽어 살아있는 방만 돌려준다.
+ * rooms:joinable은 Set이라 멤버 단위 TTL이 없어서, 크래시로 사라진 방이나 정원이 찬 방의 흔적이 남는다.
+ * 그래서 읽을 때마다 죽은 멤버를 그때그때 인덱스에서 지운다(읽는 쪽 지연 정리).
+ * 난입 대상 고르기와 로비 목록이 같은 규칙을 써야 해서 여기 한 곳에 둔다.
  */
-async function pickJoinableRoom(): Promise<RoomAssignment | null> {
-  const candidates = await redis.srandmember(JOINABLE_ROOMS_SET_KEY, JOINABLE_SAMPLE_SIZE);
-  if (candidates.length === 0) return null;
+async function readJoinableRooms(candidates: string[]): Promise<RoomSummary[]> {
+  if (candidates.length === 0) return [];
 
   const pipeline = redis.pipeline();
   for (const roomId of candidates) pipeline.hgetall(roomHashKey(roomId));
   const results = await pipeline.exec();
 
-  const alive: RoomAssignment[] = [];
+  const alive: RoomSummary[] = [];
   const stale: string[] = [];
 
   // 첫 후보에서 멈추지 않고 전부 확인한다. 그래야 죽은 멤버를 한 번에 지울 수 있다.
@@ -84,7 +94,14 @@ async function pickJoinableRoom(): Promise<RoomAssignment | null> {
       continue;
     }
 
-    alive.push({ roomId, port: Number(hash.port) });
+    alive.push({
+      roomId,
+      port: Number(hash.port),
+      playerCount: Number(hash.playerCount),
+      capacity: Number(hash.capacity),
+      // phase는 나중에 추가된 필드라, 옛 사본에는 없을 수 있다.
+      phase: (hash.phase as GamePhase) ?? "waiting",
+    });
   }
 
   if (stale.length > 0) {
@@ -92,11 +109,41 @@ async function pickJoinableRoom(): Promise<RoomAssignment | null> {
     console.log(`[matchmaking] pruned ${stale.length} stale joinable room(s)`);
   }
 
+  return alive;
+}
+
+/** 진행 중인 방 하나를 난입 대상으로 고른다. */
+async function pickJoinableRoom(): Promise<RoomAssignment | null> {
+  const candidates = await redis.srandmember(JOINABLE_ROOMS_SET_KEY, JOINABLE_SAMPLE_SIZE);
+  const alive = await readJoinableRooms(candidates);
   if (alive.length === 0) return null;
 
   // SRANDMEMBER는 count가 집합 크기 이상이면 전체를 정해진 순서로 돌려준다.
   // 그대로 앞에서부터 고르면 난입이 늘 같은 방으로 몰리므로 여기서 무작위로 뽑는다.
-  return alive[Math.floor(Math.random() * alive.length)];
+  const picked = alive[Math.floor(Math.random() * alive.length)];
+  return { roomId: picked.roomId, port: picked.port };
+}
+
+/**
+ * 쓰이지 않는 방 코드를 하나 선점한다.
+ * 코드가 5자리로 짧아진 만큼 충돌이 이론상 가능하므로, 생성만 하지 않고 Redis에서 자리를 잡아야 확정이다.
+ * HSETNX는 필드가 없을 때만 쓰므로 여러 matchmaking 인스턴스가 동시에 같은 코드를 뽑아도 한 쪽만 이긴다.
+ */
+async function claimRoomCode(port: number): Promise<string | null> {
+  for (let attempt = 0; attempt < ROOM_CODE_ATTEMPTS; attempt += 1) {
+    const roomId = generateRoomCode();
+    const key = roomHashKey(roomId);
+
+    // 선점과 동시에 TTL을 건다. 뒤이은 기록이 실패해도 코드가 영영 묶여 있지 않게 하려는 것이다.
+    // NX라 이미 TTL이 있는 살아있는 방의 만료를 늘리지는 않는다.
+    const results = await redis
+      .pipeline()
+      .hsetnx(key, "port", port)
+      .expire(key, PROJECTION_TTL_SECONDS, "NX")
+      .exec();
+    if (results?.[0]?.[1] === 1) return roomId;
+  }
+  return null;
 }
 
 // 방 배정. match면 진행 중인 방에 난입시키고, 없으면 새 방을 만든다.
@@ -118,11 +165,16 @@ app.post<{ Body: { mode?: AssignMode } }>("/assign", async (req, reply) => {
     return reply.code(503).send({ error: "no game session available" });
   }
 
-  const roomId = randomUUID();
+  const roomId = await claimRoomCode(port);
+  if (roomId === null) {
+    // 재시도를 다 쓸 정도면 코드 공간이 아니라 Redis 쪽이 이상한 상황이다.
+    console.error(`[matchmaking] failed to claim a room code after ${ROOM_CODE_ATTEMPTS} attempts`);
+    return reply.code(503).send({ error: "room code unavailable" });
+  }
+
   await redis
     .pipeline()
     .hset(roomHashKey(roomId), {
-      port,
       capacity: DEFAULT_ROOM_CAPACITY,
       playerCount: 0,
     })
@@ -134,19 +186,35 @@ app.post<{ Body: { mode?: AssignMode } }>("/assign", async (req, reply) => {
   return reply.send({ roomId, port } satisfies RoomAssignment);
 });
 
+// 로비 방 목록. 참여 가능한 방(정원이 남은 방)만 보여준다.
+// 아직 아무도 접속하지 않은 예약 방은 rooms:joinable에 없어서 목록에도 뜨지 않는다.
+app.get("/rooms", async (_req, reply) => {
+  const rooms = await readJoinableRooms(await redis.smembers(JOINABLE_ROOMS_SET_KEY));
+
+  // 사람이 많은 방을 위로. 같으면 코드 순으로 고정해 새로고침할 때 순서가 흔들리지 않게 한다.
+  rooms.sort((a, b) => b.playerCount - a.playerCount || a.roomId.localeCompare(b.roomId));
+
+  return reply.send({ rooms: rooms.slice(0, ROOM_LIST_LIMIT) } satisfies RoomListResponse);
+});
+
 // 방 코드로 접속할 포트 조회.
 app.get<{ Params: { roomId: string } }>("/rooms/:roomId", async (req, reply) => {
-  const hash = await redis.hgetall(roomHashKey(req.params.roomId));
+  // 사람이 받아 적어 넘긴 코드일 수 있으므로 표기 차이를 먼저 흡수한다.
+  const roomId = normalizeRoomCode(req.params.roomId);
+  const hash = await redis.hgetall(roomHashKey(roomId));
   if (!hash.port) {
     return reply.code(404).send({ error: "room not found" });
   }
-  return reply.send({ roomId: req.params.roomId, port: Number(hash.port) } satisfies RoomAssignment);
+  return reply.send({
+    roomId,
+    port: Number(hash.port),
+  } satisfies RoomAssignment);
 });
 
 // game-session이 빈 방을 정리했을 때 호출하는 콜백.
 // 매칭 인덱스의 주인은 matchmaking이므로 키 삭제도 여기서만 한다.
 app.delete<{ Params: { roomId: string } }>("/rooms/:roomId", async (req, reply) => {
-  const { roomId } = req.params;
+  const roomId = normalizeRoomCode(req.params.roomId);
   await redis.pipeline().del(roomHashKey(roomId)).srem(JOINABLE_ROOMS_SET_KEY, roomId).exec();
   console.log(`[matchmaking] closed room ${roomId}`);
   return reply.code(204).send();

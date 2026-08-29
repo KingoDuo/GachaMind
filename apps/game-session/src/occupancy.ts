@@ -21,6 +21,7 @@ export async function syncOccupancy(room: Room): Promise<void> {
     port: PORT,
     capacity: room.capacity,
     playerCount: room.size,
+    phase: room.phase,
   };
 
   try {

@@ -5,13 +5,23 @@ import { DrawCanvas } from "@/features/room/DrawCanvas";
 import { PlayerList } from "@/features/room/PlayerList";
 import { RoundBanner } from "@/features/room/RoundBanner";
 import { useRoomSocket } from "@/features/room/useRoomSocket";
+import { useNickname } from "@/features/player/nickname";
 import { XpWindow } from "@/features/ui/XpWindow";
-import { useParams, useSearchParams } from "next/navigation";
+import { normalizeRoomCode } from "@gachamind/shared";
+import { useParams, useRouter } from "next/navigation";
+import { useEffect } from "react";
 
 export default function RoomPage() {
-  const { roomId } = useParams<{ roomId: string }>();
-  const searchParams = useSearchParams();
-  const nickname = searchParams.get("nick") ?? "익명";
+  const params = useParams<{ roomId: string }>();
+  // 주소창에 직접 친 코드일 수 있어 서버에 묻기 전에 정규 형태로 맞춘다.
+  const roomId = normalizeRoomCode(params.roomId);
+  const router = useRouter();
+  const { nickname, ready } = useNickname();
+
+  // 초대 링크로 곧장 들어온 사람은 닉네임이 없다. 입구에서 받아 이 방으로 돌려보낸다.
+  useEffect(() => {
+    if (ready && !nickname) router.replace(`/?next=/room/${roomId}`);
+  }, [ready, nickname, roomId, router]);
 
   const {
     status,
@@ -44,14 +54,15 @@ export default function RoomPage() {
             {isFull ? "🚫" : "❓"}
           </span>
           <div>
-            <p className="font-bold">
-              {isFull ? "방이 가득 찼습니다" : "방을 찾을 수 없습니다"}
-            </p>
+            <p className="font-bold">{isFull ? "방이 가득 찼습니다" : "방을 찾을 수 없습니다"}</p>
             <p className="mt-1 text-xs text-muted">
               {isFull
                 ? `방 ${roomId}의 정원이 가득 찼습니다.`
                 : `방 코드 ${roomId}가 존재하지 않거나 이미 종료되었습니다.`}
             </p>
+            <button onClick={() => router.push("/lobby")} className="xp-button mt-3">
+              로비로 돌아가기
+            </button>
           </div>
         </XpWindow>
       </main>
@@ -72,10 +83,7 @@ export default function RoomPage() {
         bodyClassName="flex flex-col gap-2 p-2"
       >
         {/* 메뉴 막대. 실제 메뉴는 없고 XP 창 분위기를 위한 장식이다 */}
-        <div
-          className="flex gap-4 border-b border-[#aca899] px-2 pb-1.5 text-xs"
-          aria-hidden
-        >
+        <div className="flex gap-4 border-b border-[#aca899] px-2 pb-1.5 text-xs" aria-hidden>
           <span>파일(F)</span>
           <span>편집(E)</span>
           <span>보기(V)</span>
@@ -118,6 +126,9 @@ export default function RoomPage() {
           <span className="xp-panel max-w-56 truncate px-2 py-1" title={roomId}>
             방 {roomId}
           </span>
+          <button onClick={() => router.push("/lobby")} className="xp-button py-0.5">
+            로비로
+          </button>
         </div>
       </XpWindow>
     </main>

@@ -52,6 +52,8 @@
 3. 클라이언트는 배정받은 포트의 game-session에 WS로 직접 연결.
 4. game-session은 **occupancy(playerCount)와 joinable 소속만** Redis에 갱신하고, 방이 비면 matchmaking에 정리 콜백(DELETE)을 보낸다.
 
+방 코드는 사람이 부르고 받아 적는 값이라 5자리 Crockford Base32(`packages/shared`의 `generateRoomCode`)다. 짧은 만큼 충돌이 가능해서 matchmaking이 Redis `HSETNX`로 코드를 선점해야 확정된다. 코드를 받는 입구(web 입장 폼·URL, matchmaking 조회, game-session join)는 전부 `normalizeRoomCode`를 통과시켜 대소문자·O/0 표기 차이를 흡수한다.
+
 핵심: **occupancy의 source of truth는 game-session 인메모리**이고 Redis는 그 projection(사본)이다. matchmaking의 Redis 조회는 "제안"일 뿐, 정원 최종 판정은 authority인 game-session이 WS join 시점에 한다(꽉 차면 `room-full`로 튕김).
 
 ### Redis
@@ -66,6 +68,9 @@
 
 ### 화면 렌더링
 - 로비/인게임 화면 모두 **같은 Next.js 앱**의 다른 라우트로 렌더링. game-session은 화면을 그리지 않는 headless 서버.
+- 화면은 셋: `/`(닉네임 입력) → `/lobby`(방 목록·방 만들기·빠른 시작·코드 입장) → `/room/{코드}`(게임).
+- 방 목록은 `GET /api/rooms` → matchmaking `GET /rooms`. **최초 진입 1회 + 새로고침 버튼**으로만 받는 스냅샷이다(폴링·구독 없음). 참여 가능한 방(`rooms:joinable`)만 나오므로 정원이 찬 방과 아직 아무도 접속하지 않은 예약 방은 빠진다.
+- 닉네임은 sessionStorage(`gachamind:nickname`)에 둔다. 쿼리스트링으로 나르면 방 링크를 복사해 줄 때 남의 닉네임이 따라간다. 닉네임 없이 방 링크로 들어오면 `/?next=/room/{코드}`로 보내 입력받고 되돌린다.
 
 ### 제외/유보된 것
 - **Nginx/게이트웨이**: 로컬 개발 범위에선 제외(각 서비스에 직접 포트로 접속). 라우팅이 복잡해지면 그때 도입.
@@ -76,6 +81,7 @@
 ```
 apps/
   web/             # Next.js — UI + BFF.  /api/rooms 는 matchmaking으로 프록시
+                   #   app/(입구) app/lobby app/room/[roomId], features/{lobby,room,player,ui}
   matchmaking/     # Fastify — 방 배정 (Redis 매칭 상태 소유)
   game-session/    # ws — 실시간 authority. src/room.ts(Room/RoomManager), src/index.ts
   user/            # NestJS + TypeORM(Postgres). 가입·프로필·전적
@@ -102,6 +108,15 @@ pnpm dev:web           # dev:web / dev:matchmaking / dev:game-session / dev:user
 Docker 이미지는 루트 `Dockerfile` 하나로 만든다(`--build-arg SERVICE=<앱이름>`, 멀티스테이지 → 서비스별로 그 앱의 prod 의존성만 든 얇은 이미지). build context는 repo 루트다(shared + lockfile 때문). 서비스 간엔 컨테이너명(`redis`/`postgres`/`rabbitmq`/`matchmaking`)으로 통신한다. 환경변수 예시는 `.env.example` 참고.
 
 > **주의:** pnpm 11.10은 Node 22.13+를 요구한다(`packageManager` 핀).
+
+## AWS 배포
+계정 `472227100986` / 서울(`ap-northeast-2`) / 도메인 `gachamind.com`(Route53). 인프라는 `infra/terraform`(Terraform, 상태는 S3 `gachamind-tfstate-…`), 배포는 `infra/deploy.sh`.
+- **현재 형태(1단계)**: ECS on EC2 **한 대**(t4g.medium, arm64) + `host` 네트워크. compose 의 서비스 9개가 ECS 서비스 9개로 1:1 대응하고, 서로를 `localhost:PORT` 로 부른다(로컬 `pnpm dev` 구성과 같은 모양). Redis/Postgres/RabbitMQ 도 아직 컨테이너(Postgres 는 `/data/postgres` 호스트 볼륨).
+- **입구는 ALB + ACM(HTTPS)**: Route53 apex/www → ALB Alias. `:80`→443 리다이렉트, `:443` 기본 → web(EC2:80), **`/gs/{port}/*` → 해당 game-session 샤드(EC2:{port})**. EC2 SG 는 ALB 에서 오는 트래픽만 허용(직접 접근 불가). 클라이언트는 https 페이지면 `wss://도메인/gs/{port}`, http(로컬)면 `ws://host:{port}` 로 붙는다(`useRoomSocket.ts`). game-session 은 같은 포트에 `GET /health`(ALB 헬스체크)와 30s WS ping(ALB idle timeout·유령 연결 정리)을 가진다.
+- 비밀값(Postgres 비밀번호, `DATABASE_URL`, `JWT_SECRET`)은 Terraform 이 생성해 SSM Parameter Store 에 두고 태스크 정의가 ARN 으로 참조한다.
+- 배포: `infra/deploy.sh` → 이미지 5개 빌드(`--platform linux/arm64`)·ECR push(태그 = git sha) → `terraform apply -var image_tag=<sha>` 로 태스크 정의 갱신 → ECS 가 서비스를 갈아끼운다(인스턴스 1대라 몇 초 끊김).
+- 접속/로그: SSH 없음. `aws ssm start-session --target <instance_id>`, 로그는 CloudWatch `/gachamind/<service>`.
+- 다음 단계(미정): EC2 2대 이상 시 내부통신(Service Connect)·game-session 라우팅·관리형 DB 분리, 배포 자동화(GitHub Actions, 바뀐 서비스만).
 
 ## 현재 상태 (스캐폴딩)
 각 서비스는 **부팅 + health 응답 수준**이고, 실제 로직은 `TODO` 주석 자리에서 채워나간다:

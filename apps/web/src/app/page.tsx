@@ -1,53 +1,29 @@
 "use client";
 
+import { MAX_NICKNAME_LENGTH, storeNickname } from "@/features/player/nickname";
 import { XpWindow } from "@/features/ui/XpWindow";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+/**
+ * 입력 후 돌아갈 곳. 방 링크로 왔다가 닉네임이 없어 여기로 튕긴 경우 그 방으로 돌려보낸다.
+ * useSearchParams를 쓰면 이 페이지가 통째로 서버 렌더에서 빠져 첫 화면이 비므로,
+ * 버튼을 누른 시점에 주소창에서 직접 읽는다. 외부 주소로 나가지 않게 앱 내부 경로만 허용한다.
+ */
+function nextPath(): string {
+  const requested = new URLSearchParams(window.location.search).get("next") ?? "";
+  return requested.startsWith("/") && !requested.startsWith("//") ? requested : "/lobby";
+}
+
 export default function Home() {
   const router = useRouter();
   const [nickname, setNickname] = useState("");
-  const [joinRoomId, setJoinRoomId] = useState("");
-  const [isCreating, setIsCreating] = useState(false);
-  const [isMatching, setIsMatching] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  // 배정 가능한 game-session이 하나도 없으면 matchmaking이 503을 준다.
-  async function assignAndEnter(path: string) {
-    setError(null);
-    const res = await fetch(path, { method: "POST" });
-    if (!res.ok) {
-      setError("지금은 들어갈 수 있는 게임 서버가 없습니다. 잠시 후 다시 시도해주세요.");
-      return;
-    }
-    const { roomId } = await res.json();
-    router.push(`/room/${roomId}?nick=${encodeURIComponent(nickname)}`);
-  }
-
-  async function handleCreateRoom() {
-    if (!nickname.trim()) return;
-    setIsCreating(true);
-    try {
-      await assignAndEnter("/api/rooms");
-    } finally {
-      setIsCreating(false);
-    }
-  }
-
-  async function handleQuickMatch() {
-    //닉네임 검증
-    if (!nickname.trim()) return;
-    setIsMatching(true);
-    try {
-      await assignAndEnter("/api/rooms/match");
-    } finally {
-      setIsMatching(false);
-    }
-  }
-
-  function handleJoinRoom() {
-    if (!nickname.trim() || !joinRoomId.trim()) return;
-    router.push(`/room/${joinRoomId.trim()}?nick=${encodeURIComponent(nickname)}`);
+  function handleStart() {
+    const trimmed = nickname.trim();
+    if (!trimmed) return;
+    storeNickname(trimmed);
+    router.push(nextPath());
   }
 
   return (
@@ -64,64 +40,30 @@ export default function Home() {
         </div>
 
         <label className="text-xs font-bold" htmlFor="nickname">
-          대화명
+          닉네임
         </label>
         <input
           id="nickname"
           placeholder="닉네임을 입력하세요"
           value={nickname}
           onChange={(e) => setNickname(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleStart()}
+          maxLength={MAX_NICKNAME_LENGTH}
+          autoFocus
           className="xp-input w-full"
         />
 
-        <div className="mt-1 flex gap-2">
-          <button
-            onClick={handleCreateRoom}
-            disabled={isCreating || !nickname.trim()}
-            className="xp-button xp-button-default flex-1"
-          >
-            {isCreating ? "만드는 중..." : "방 만들기"}
-          </button>
-          <button
-            onClick={handleQuickMatch}
-            disabled={isMatching || !nickname.trim()}
-            className="xp-button flex-1"
-          >
-            {isMatching ? "매칭 중..." : "빠른 시작"}
-          </button>
-        </div>
+        <button
+          onClick={handleStart}
+          disabled={!nickname.trim()}
+          className="xp-button xp-button-default mt-1"
+        >
+          게임 시작
+        </button>
 
-        {error && (
-          <p className="border border-[#aca899] bg-[#ffffe1] px-2 py-1 text-xs text-red-700">
-            {error}
-          </p>
-        )}
-
-        <div className="my-1 flex items-center gap-3 text-xs text-muted">
-          <span className="h-0.5 flex-1 border-t border-b border-t-[#aca899] border-b-white" />
-          또는
-          <span className="h-0.5 flex-1 border-t border-b border-t-[#aca899] border-b-white" />
-        </div>
-
-        <label className="text-xs font-bold" htmlFor="room-code">
-          방 코드
-        </label>
-        <div className="flex gap-2">
-          <input
-            id="room-code"
-            placeholder="초대받은 방 코드"
-            value={joinRoomId}
-            onChange={(e) => setJoinRoomId(e.target.value)}
-            className="xp-input min-w-0 flex-1"
-          />
-          <button
-            onClick={handleJoinRoom}
-            disabled={!nickname.trim() || !joinRoomId.trim()}
-            className="xp-button"
-          >
-            입장
-          </button>
-        </div>
+        <p className="text-xs text-muted">
+          가입 없이 바로 플레이할 수 있습니다. 닉네임은 이 탭에서만 유지됩니다.
+        </p>
       </XpWindow>
     </main>
   );

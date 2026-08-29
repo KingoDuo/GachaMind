@@ -10,11 +10,7 @@ import type {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export type RoomConnectionStatus =
-  | "connecting"
-  | "connected"
-  | "disconnected"
-  | "not-found"
-  | "room-full";
+  "connecting" | "connected" | "disconnected" | "not-found" | "room-full";
 
 export interface FeedEntry {
   kind: "chat" | "system" | "correct";
@@ -69,7 +65,8 @@ const INITIAL_GAME: GameState = {
 /** 피드가 무한히 길어지지 않도록 최근 것만 남긴다. */
 const MAX_FEED_ENTRIES = 200;
 
-export function useRoomSocket(roomId: string, nickname: string) {
+/** 닉네임이 아직 정해지지 않았으면(null) 접속하지 않는다. 익명으로 들어갔다가 다시 붙는 걸 막는다. */
+export function useRoomSocket(roomId: string, nickname: string | null) {
   const [status, setStatus] = useState<RoomConnectionStatus>("connecting");
   const [me, setMe] = useState<PlayerSummary | null>(null);
   const [players, setPlayers] = useState<PlayerSummary[]>([]);
@@ -102,6 +99,10 @@ export function useRoomSocket(roomId: string, nickname: string) {
   );
 
   useEffect(() => {
+    if (!nickname) return;
+    // 아래 클로저까지 좁혀진 타입을 들고 가려고 const로 받는다.
+    const joinNickname = nickname;
+
     let cancelled = false;
 
     async function connect() {
@@ -113,12 +114,18 @@ export function useRoomSocket(roomId: string, nickname: string) {
       const { port } = await res.json();
       if (cancelled) return;
 
-      const socket = new WebSocket(`ws://${window.location.hostname}:${port}`);
+      // https(프로덕션)면 로드밸런서가 /gs/{port} 경로를 해당 game-session 샤드로 넘긴다(infra/terraform/lb.tf).
+      // http(로컬)면 샤드 포트에 직접 붙는다.
+      const wsUrl =
+        window.location.protocol === "https:"
+          ? `wss://${window.location.host}/gs/${port}`
+          : `ws://${window.location.hostname}:${port}`;
+      const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
 
       socket.onopen = () => {
         setStatus("connected");
-        const join: ClientToServerMessage = { type: "join", roomId, nickname };
+        const join: ClientToServerMessage = { type: "join", roomId, nickname: joinNickname };
         socket.send(JSON.stringify(join));
       };
 

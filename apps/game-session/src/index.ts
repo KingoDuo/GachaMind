@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:http";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import type { ClientToServerMessage, StrokeSegment } from "@gachamind/shared";
+import {
+  normalizeRoomCode,
+  type ClientToServerMessage,
+  type StrokeSegment,
+} from "@gachamind/shared";
 import { RoomManager, type Room } from "./room.js";
 import { handleGuess, handlePlayerLeftDuringGame, startGame } from "./game.js";
 import { PORT } from "./config.js";
@@ -20,9 +25,23 @@ const MAX_CHAT_LENGTH = 200;
 /** 한 번에 받을 수 있는 좌표 수. 비정상적으로 큰 패킷을 막는다. */
 const MAX_STROKE_POINTS = 256;
 
+/** 죽은 연결을 정리하는 ping 주기. 로드밸런서 idle timeout(보통 60s)보다 짧아야 유휴 연결이 끊기지 않는다. */
+const HEARTBEAT_INTERVAL_MS = 30_000;
+
 const roomManager = new RoomManager();
-const wss = new WebSocketServer({ port: PORT });
-console.log(`[game-session] pid=${process.pid} listening on ${PORT}`);
+
+// WS 와 같은 포트에 HTTP 도 연다. 로드밸런서 헬스체크가 GET /health 로 살아있는지 확인한다.
+const server = createServer((req, res) => {
+  if (req.url === "/health") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", service: "game-session", port: PORT }));
+    return;
+  }
+  res.writeHead(404);
+  res.end();
+});
+const wss = new WebSocketServer({ server });
+server.listen(PORT, () => console.log(`[game-session] pid=${process.pid} listening on ${PORT}`));
 
 interface ConnectionState {
   joinedRoomId: string | null;
@@ -39,12 +58,16 @@ async function handleJoin(
   if (state.joinedRoomId || state.joining) return;
   state.joining = true;
 
+  // 방 코드는 사람이 받아 적어 넘기는 값이라 표기가 흔들린다. 여기서 정규 형태로 맞춰야
+  // 같은 방이 대소문자만 다른 코드로 두 개 생기지 않는다.
+  const roomId = normalizeRoomCode(message.roomId);
+
   // 이미 이 프로세스가 들고 있는 방이면 확인이 필요 없다(가장 흔한 경로라 await 없이 지나간다).
-  let room = roomManager.get(message.roomId);
+  let room = roomManager.get(roomId);
   if (!room) {
-    if (!(await isRoomAssignedHere(message.roomId))) {
+    if (!(await isRoomAssignedHere(roomId))) {
       state.joining = false;
-      socket.send(JSON.stringify({ type: "room-not-found", roomId: message.roomId }));
+      socket.send(JSON.stringify({ type: "room-not-found", roomId }));
       socket.close();
       return;
     }
@@ -53,7 +76,7 @@ async function handleJoin(
       state.joining = false;
       return;
     }
-    room = roomManager.getOrCreate(message.roomId);
+    room = roomManager.getOrCreate(roomId);
   }
 
   if (room.isFull) {
@@ -66,7 +89,7 @@ async function handleJoin(
   const playerId = randomUUID();
   const nickname = message.nickname.trim().slice(0, 20) || "익명";
   state.playerId = playerId;
-  state.joinedRoomId = message.roomId;
+  state.joinedRoomId = roomId;
   room.addPlayer({ id: playerId, nickname, socket, score: 0 });
 
   // 게임 중에 들어온 사람도 다음 라운드부터는 출제할 수 있게 순번 뒤에 붙인다.
@@ -210,12 +233,29 @@ function handleClose(state: ConnectionState): void {
 void publishSessionLoad(roomManager);
 startProjectionHeartbeat(roomManager);
 
+// 하트비트. 브라우저는 ping 에 자동으로 pong 을 보낸다. 한 주기 안에 pong 이 없으면 죽은 연결로 보고 끊는다
+// (close 이벤트가 나면서 방에서도 빠진다). 네트워크가 조용히 끊긴 소켓이 방에 유령으로 남는 걸 막는다.
+const alive = new WeakSet<WebSocket>();
+
 wss.on("connection", (socket: WebSocket) => {
   const state: ConnectionState = { joinedRoomId: null, playerId: null, joining: false };
+  alive.add(socket);
 
+  socket.on("pong", () => alive.add(socket));
   socket.on("message", (raw) => handleMessage(socket, state, raw));
   socket.on("close", () => handleClose(state));
 });
+
+const heartbeat = setInterval(() => {
+  for (const socket of wss.clients) {
+    if (!alive.has(socket)) {
+      socket.terminate();
+      continue;
+    }
+    alive.delete(socket);
+    socket.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
 
 /**
  * 프로세스가 내려가면 이 프로세스가 들고 있던 방도 같이 사라진다.
@@ -223,7 +263,9 @@ wss.on("connection", (socket: WebSocket) => {
  */
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`[game-session] ${signal}: closing ${roomManager.roomCount} room(s)`);
+  clearInterval(heartbeat);
   wss.close();
+  server.close();
   await closeEventPublisher();
   await clearSessionLoad();
   await Promise.all(roomManager.allRooms.map((room) => notifyRoomClosed(room.id)));
