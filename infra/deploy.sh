@@ -42,9 +42,14 @@ push() {
   done
 }
 
-# 지금 ECS 에 배포된 태그. 태스크 정의가 없으면(첫 배포) 새 태그를 쓴다.
+# 지금 ECS 서비스가 실제로 쓰는 태스크 정의의 태그(최신 리비전이 아니라 — 롤백됐을 수 있으니).
+# game-session 은 샤드 서비스(game-session-4001…) 중 첫 번째를 대표로 본다. 서비스가 없으면(첫 배포) 빈 값.
 current_tag() {
-  aws ecs describe-task-definition --region "$REGION" --task-definition "gachamind-$1" \
+  local svc="$1"; [ "$svc" = "game-session" ] && svc="game-session-4001"
+  local td
+  td=$(aws ecs describe-services --region "$REGION" --cluster gachamind --services "$svc"     --query 'services[0].taskDefinition' --output text 2>/dev/null || true)
+  [ -z "$td" ] || [ "$td" = "None" ] && return 0
+  aws ecs describe-task-definition --region "$REGION" --task-definition "$td" \
     --query 'taskDefinition.containerDefinitions[0].image' --output text 2>/dev/null | sed 's/.*://' || true
 }
 

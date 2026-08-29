@@ -127,7 +127,11 @@ jobs:
             if echo "$changed" | jq -e --arg s "$s" 'index($s)' >/dev/null; then
               tag="${{ github.sha }}"
             else
-              tag=$(aws ecs describe-task-definition --task-definition "gachamind-$s" \
+              # "지금 서비스가 실제로 쓰는" 태스크 정의에서 읽는다. 최신 리비전이 아니라 — 롤백됐을 수 있으니.
+              # game-session 은 샤드 서비스(game-session-4001…) 중 첫 번째를 대표로 본다.
+              svc="$s"; [ "$s" = "game-session" ] && svc="game-session-4001"
+              td=$(aws ecs describe-services --cluster gachamind --services "$svc" --query 'services[0].taskDefinition' --output text 2>/dev/null || true)
+              tag=$([ -n "$td" ] && [ "$td" != "None" ] && aws ecs describe-task-definition --task-definition "$td" \
                     --query 'taskDefinition.containerDefinitions[0].image' --output text 2>/dev/null | sed 's/.*://' || true)
               tag="${tag:-${{ github.sha }}}"
             fi
