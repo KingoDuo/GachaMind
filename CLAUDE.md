@@ -114,7 +114,7 @@ Docker 이미지는 루트 `Dockerfile` 하나로 만든다(`--build-arg SERVICE
 - **현재 형태(1단계)**: ECS on EC2 **한 대**(t4g.medium, arm64) + `host` 네트워크. compose 의 서비스 9개가 ECS 서비스 9개로 1:1 대응하고, 서로를 `localhost:PORT` 로 부른다(로컬 `pnpm dev` 구성과 같은 모양). Redis/Postgres/RabbitMQ 도 아직 컨테이너(Postgres 는 `/data/postgres` 호스트 볼륨).
 - **입구는 ALB + ACM(HTTPS)**: Route53 apex/www → ALB Alias. `:80`→443 리다이렉트, `:443` 기본 → web(EC2:80), **`/gs/{port}/*` → 해당 game-session 샤드(EC2:{port})**. EC2 SG 는 ALB 에서 오는 트래픽만 허용(직접 접근 불가). 클라이언트는 https 페이지면 `wss://도메인/gs/{port}`, http(로컬)면 `ws://host:{port}` 로 붙는다(`useRoomSocket.ts`). game-session 은 같은 포트에 `GET /health`(ALB 헬스체크)와 30s WS ping(ALB idle timeout·유령 연결 정리)을 가진다.
 - 비밀값(Postgres 비밀번호, `DATABASE_URL`, `JWT_SECRET`)은 Terraform 이 생성해 SSM Parameter Store 에 두고 태스크 정의가 ARN 으로 참조한다.
-- 배포: `infra/deploy.sh` → 이미지 5개 빌드(`--platform linux/arm64`)·ECR push(태그 = git sha) → `terraform apply -var image_tag=<sha>` 로 태스크 정의 갱신 → ECS 가 서비스를 갈아끼운다(인스턴스 1대라 몇 초 끊김).
+- 배포: **main 에 push 하면 GitHub Actions**(`.github/workflows/deploy.yml`)가 바뀐 앱만 arm64 이미지로 빌드(QEMU)·ECR push(태그 = 커밋 sha)하고, `image_tags` map(바뀐 앱 = 새 sha, 나머지 = 지금 배포된 태그)으로 `terraform apply` → 바뀐 서비스만 재시작(인스턴스 1대라 몇 초 끊김). `packages/shared`·`Dockerfile`·lockfile 이 바뀌면 전부. AWS 권한은 OIDC 롤 `gachamind-github-deploy`(main 브랜치만). 수동 배포는 `infra/deploy.sh [all|build|push|apply] [service ...]`.
 - 접속/로그: SSH 없음. `aws ssm start-session --target <instance_id>`, 로그는 CloudWatch `/gachamind/<service>`.
 - 다음 단계(미정): EC2 2대 이상 시 내부통신(Service Connect)·game-session 라우팅·관리형 DB 분리, 배포 자동화(GitHub Actions, 바뀐 서비스만).
 

@@ -15,9 +15,17 @@ variable "instance_type" {
   default     = "t4g.medium"
 }
 
-variable "image_tag" {
-  description = "ECR에 push된 앱 이미지 태그(보통 git short sha). deploy.sh 가 넘긴다."
-  type        = string
+variable "image_tags" {
+  description = <<-EOT
+    서비스별 ECR 이미지 태그(보통 git sha). 서비스마다 따로 두는 이유:
+    태그가 하나면 web 만 고쳐도 6개 태스크 정의가 전부 바뀌어 전부 재시작된다.
+    배포 스크립트/워크플로우가 "바뀐 서비스 = 새 sha, 나머지 = 지금 돌고 있는 태그" 로 채워 넘긴다.
+  EOT
+  type        = map(string)
+  validation {
+    condition     = alltrue([for s in ["web", "matchmaking", "game-session", "user", "results-worker"] : contains(keys(var.image_tags), s)])
+    error_message = "image_tags 에는 web, matchmaking, game-session, user, results-worker 키가 모두 있어야 한다."
+  }
 }
 
 variable "game_session_ports" {

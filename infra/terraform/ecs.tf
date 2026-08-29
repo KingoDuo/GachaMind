@@ -17,7 +17,7 @@ resource "aws_ecs_cluster" "main" {
 }
 
 locals {
-  ecr = { for k, r in aws_ecr_repository.app : k => "${r.repository_url}:${var.image_tag}" }
+  ecr = { for k, r in aws_ecr_repository.app : k => "${r.repository_url}:${var.image_tags[k]}" }
 
   redis_url    = "redis://localhost:6379"
   rabbitmq_url = "amqp://localhost:5672"

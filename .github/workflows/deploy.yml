@@ -1,0 +1,139 @@
+# main 에 push 되면 바뀐 서비스만 빌드·push 하고 terraform apply 로 ECS 에 반영한다.
+#
+#   detect  어떤 앱이 바뀌었나 (apps/<svc>/** → 그 앱, shared/Dockerfile/lockfile → 전부)
+#   build   바뀐 앱만 arm64 이미지 빌드 → ECR push (태그 = 커밋 sha)
+#   deploy  image_tags = { 바뀐 앱: 새 sha, 나머지: 지금 ECS 에 있는 태그 } 로 terraform apply
+#
+# AWS 자격증명은 OIDC (infra/terraform/github_oidc.tf). 저장된 키 없음.
+# 러너는 x86 이라 QEMU 로 arm64 를 빌드한다. 레이어는 GitHub 캐시에 남겨 다음 빌드에서 재사용한다.
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      all:
+        description: "모든 서비스를 강제로 다시 빌드·배포"
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write   # OIDC 토큰 발급
+  contents: read
+
+# 배포는 한 번에 하나. 연달아 push 되면 줄 서서 순서대로 돈다.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-2
+  AWS_ROLE: arn:aws:iam::472227100986:role/gachamind-github-deploy
+  REGISTRY: 472227100986.dkr.ecr.ap-northeast-2.amazonaws.com
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.pick.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          # push 면 직전 커밋과, 수동 실행이면 main 끝과 비교한다(수동은 inputs.all 로 강제).
+          filters: |
+            all:
+              - packages/shared/**
+              - Dockerfile
+              - .dockerignore
+              - pnpm-lock.yaml
+              - pnpm-workspace.yaml
+              - package.json
+            web: [apps/web/**]
+            matchmaking: [apps/matchmaking/**]
+            game-session: [apps/game-session/**]
+            user: [apps/user/**]
+            results-worker: [apps/results-worker/**]
+      - id: pick
+        shell: bash
+        run: |
+          all='["web","matchmaking","game-session","user","results-worker"]'
+          if [ "${{ inputs.all }}" = "true" ] || [ "${{ steps.changes.outputs.all }}" = "true" ]; then
+            echo "services=$all" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          list=()
+          for s in web matchmaking game-session user results-worker; do
+            v=$(echo '${{ toJSON(steps.changes.outputs) }}' | jq -r --arg s "$s" '.[$s]')
+            [ "$v" = "true" ] && list+=("\"$s\"")
+          done
+          echo "services=[$(IFS=,; echo "${list[*]}")]" >> "$GITHUB_OUTPUT"
+      - run: echo "build targets → ${{ steps.pick.outputs.services }}"
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: ${{ fromJSON(needs.detect.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          build-args: SERVICE=${{ matrix.service }}
+          push: true
+          tags: ${{ env.REGISTRY }}/gachamind/${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+
+  deploy:
+    needs: [detect, build]
+    # build 가 건너뛰어졌어도(앱 변경 없음, 인프라만 변경) apply 는 한다.
+    if: always() && needs.detect.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.0"
+          terraform_wrapper: false
+      - name: image_tags 계산 (바뀐 앱 = 새 sha, 나머지 = 지금 배포된 태그)
+        id: tags
+        shell: bash
+        run: |
+          changed='${{ needs.detect.outputs.services }}'
+          pairs=()
+          for s in web matchmaking game-session user results-worker; do
+            if echo "$changed" | jq -e --arg s "$s" 'index($s)' >/dev/null; then
+              tag="${{ github.sha }}"
+            else
+              tag=$(aws ecs describe-task-definition --task-definition "gachamind-$s" \
+                    --query 'taskDefinition.containerDefinitions[0].image' --output text 2>/dev/null | sed 's/.*://' || true)
+              tag="${tag:-${{ github.sha }}}"
+            fi
+            pairs+=("\"$s\"=\"$tag\"")
+            echo "$s → $tag"
+          done
+          echo "value={$(IFS=,; echo "${pairs[*]}")}" >> "$GITHUB_OUTPUT"
+      - run: terraform -chdir=infra/terraform init -input=false
+      - run: terraform -chdir=infra/terraform apply -input=false -auto-approve -var 'image_tags=${{ steps.tags.outputs.value }}'
