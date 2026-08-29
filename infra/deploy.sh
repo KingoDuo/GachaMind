@@ -58,6 +58,10 @@ apply() {
   for svc in "${ALL_SERVICES[@]}"; do
     local tag
     if [ ${#SERVICES[@]} -gt 0 ] && printf '%s\n' "${SERVICES[@]}" | grep -qx "$svc"; then tag="$TAG"; else tag="$(current_tag "$svc")"; tag="${tag:-$TAG}"; fi
+    # 그 태그의 이미지가 ECR 에 실제로 있어야 한다. 없으면 존재하지 않는 이미지로 배포되어 서비스가 내려간다.
+    if ! aws ecr describe-images --region "$REGION" --repository-name "gachamind/$svc" --image-ids "imageTag=$tag" >/dev/null 2>&1; then
+      echo "error: gachamind/$svc:$tag 이미지가 ECR 에 없다 — 배포 중단" >&2; exit 1
+    fi
     pairs+=("\"$svc\"=\"$tag\"")
   done
   local var="{$(IFS=,; echo "${pairs[*]}")}"
