@@ -100,8 +100,12 @@ export interface RoomStateMessage {
   round: number;
   totalRounds: number;
   drawerId: string | null;
-  /** 진행 중인 라운드의 남은 시간 기준시각(epoch ms). 대기 중이면 null. */
-  roundEndsAt: number | null;
+  /**
+   * 진행 중인 라운드의 남은 시간(ms). 대기 중이면 null.
+   * 절대 시각(epoch)이 아니라 서버가 보내는 순간 계산한 남은 양이다.
+   * 클라이언트 시계가 서버와 어긋나도 타이머가 틀어지지 않도록, 클라는 받은 시각부터 자기 시계로만 센다.
+   */
+  remainingMs: number | null;
   /** 비출제자에게는 제시어 대신 글자 수만 준다. */
   wordLength: number | null;
   strokes: StrokeSegment[];
@@ -169,7 +173,8 @@ export interface RoundStartedMessage {
   totalRounds: number;
   drawerId: string;
   drawerNickname: string;
-  roundEndsAt: number;
+  /** 라운드 남은 시간(ms). RoomStateMessage.remainingMs와 같은 의미. */
+  remainingMs: number;
   wordLength: number;
   word?: string;
 }

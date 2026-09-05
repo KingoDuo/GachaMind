@@ -109,7 +109,7 @@ async function handleJoin(
     round: room.round,
     totalRounds: room.totalRounds,
     drawerId: room.drawerId,
-    roundEndsAt: room.roundEndsAt,
+    remainingMs: room.remainingMs,
     wordLength: room.word?.length ?? null,
     strokes: room.strokes,
   });

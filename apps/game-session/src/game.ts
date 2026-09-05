@@ -78,7 +78,7 @@ export function startRound(room: Room): void {
     totalRounds: room.totalRounds,
     drawerId: drawer.id,
     drawerNickname: drawer.nickname,
-    roundEndsAt: room.roundEndsAt,
+    remainingMs: room.remainingMs ?? ROUND_DURATION_MS,
     wordLength: room.word.length,
   };
   // 제시어 본문은 출제자에게만. 나머지는 글자 수만 받는다.
@@ -173,8 +173,7 @@ export function handleGuess(room: Room, player: Player, text: string): boolean {
   if (isGuesser && guess === answer) {
     room.solvedPlayerIds.add(player.id);
 
-    const remaining = Math.max(0, (room.roundEndsAt ?? 0) - Date.now());
-    const speedRatio = remaining / ROUND_DURATION_MS;
+    const speedRatio = (room.remainingMs ?? 0) / ROUND_DURATION_MS;
     player.score += BASE_ANSWER_SCORE + Math.round(SPEED_BONUS_SCORE * speedRatio);
 
     const drawer = room.drawerId ? room.players.get(room.drawerId) : undefined;

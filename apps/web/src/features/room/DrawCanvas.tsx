@@ -1,7 +1,7 @@
 "use client";
 
 import type { Point, StrokeSegment } from "@gachamind/shared";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { DrawChannel } from "./useRoomSocket";
 
 const COLORS = ["#171717", "#ef4444", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ffffff"];
@@ -48,12 +48,30 @@ export function DrawCanvas({ channel, canDraw, onStroke, onClear }: Props) {
   // 포인터 입력은 프레임 단위로 모아서 보낸다. pointermove마다 보내면 패킷이 과도해진다.
   const bufferRef = useRef<Point[]>([]);
   const drawingRef = useRef(false);
+  // 이번 획에서 이미 보낸 묶음이 있는지. 없으면 pointerup 때 점 하나라도 보내야 "점 찍기"가 된다.
+  const flushedRef = useRef(false);
   // rAF 루프가 색/굵기 변경 때마다 재시작하지 않도록 ref로 들고 있는다.
   const styleRef = useRef({ color, width });
 
   useEffect(() => {
     styleRef.current = { color, width };
   }, [color, width]);
+
+  /** 점 묶음 하나를 내 캔버스에 그리고 서버로 보낸다. */
+  const emitSegment = useCallback(
+    (points: Point[]) => {
+      const segment: StrokeSegment = { points, ...styleRef.current };
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext("2d");
+      if (canvas && ctx) {
+        const rect = canvas.getBoundingClientRect();
+        paintSegment(ctx, segment, rect.width, rect.height);
+      }
+      onStroke(segment);
+      flushedRef.current = true;
+    },
+    [onStroke],
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -94,7 +112,12 @@ export function DrawCanvas({ channel, canDraw, onStroke, onClear }: Props) {
   }, [channel]);
 
   useEffect(() => {
-    if (!canDraw) return;
+    if (!canDraw) {
+      // 라운드가 끝나는 등 권한이 사라지면 그리던 획도 버린다.
+      drawingRef.current = false;
+      bufferRef.current = [];
+      return;
+    }
     let frame = 0;
 
     function flush() {
@@ -102,22 +125,14 @@ export function DrawCanvas({ channel, canDraw, onStroke, onClear }: Props) {
       const buffer = bufferRef.current;
       if (buffer.length < 2) return;
 
-      const segment: StrokeSegment = { points: buffer, ...styleRef.current };
       // 다음 묶음이 이어지도록 마지막 점을 남긴다.
       bufferRef.current = [buffer[buffer.length - 1]];
-
-      const canvas = canvasRef.current;
-      const ctx = canvas?.getContext("2d");
-      if (canvas && ctx) {
-        const rect = canvas.getBoundingClientRect();
-        paintSegment(ctx, segment, rect.width, rect.height);
-      }
-      onStroke(segment);
+      emitSegment(buffer);
     }
 
     frame = requestAnimationFrame(flush);
     return () => cancelAnimationFrame(frame);
-  }, [canDraw, onStroke]);
+  }, [canDraw, emitSegment]);
 
   function toNormalized(event: React.PointerEvent<HTMLCanvasElement>): Point {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -131,6 +146,7 @@ export function DrawCanvas({ channel, canDraw, onStroke, onClear }: Props) {
     if (!canDraw) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     drawingRef.current = true;
+    flushedRef.current = false;
     bufferRef.current = [toNormalized(event)];
   }
 
@@ -139,8 +155,24 @@ export function DrawCanvas({ channel, canDraw, onStroke, onClear }: Props) {
     bufferRef.current.push(toNormalized(event));
   }
 
+  /**
+   * 획 끝. rAF가 아직 안 보낸 꼬리를 여기서 마저 보낸다.
+   * 안 그러면 마지막 프레임 사이의 점들이 잘리고, 클릭 한 번(점 1개)은 아예 그려지지 않는다.
+   */
   function handlePointerUp() {
     if (!drawingRef.current) return;
+    drawingRef.current = false;
+    const buffer = bufferRef.current;
+    bufferRef.current = [];
+
+    // 점이 1개뿐이면 이미 보낸 묶음의 마지막 점(중복)이거나, 아무것도 안 보낸 "점 찍기"다.
+    if (buffer.length >= 2 || (buffer.length === 1 && !flushedRef.current)) {
+      emitSegment(buffer);
+    }
+  }
+
+  /** 브라우저가 입력을 끊은 경우(제스처 가로채기 등). 꼬리를 보내지 않고 상태만 정리한다. */
+  function handlePointerCancel() {
     drawingRef.current = false;
     bufferRef.current = [];
   }
@@ -152,6 +184,7 @@ export function DrawCanvas({ channel, canDraw, onStroke, onClear }: Props) {
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
         onPointerLeave={handlePointerUp}
         className={`xp-sunken aspect-4/3 w-full touch-none ${
           canDraw ? "cursor-crosshair" : "cursor-default"
