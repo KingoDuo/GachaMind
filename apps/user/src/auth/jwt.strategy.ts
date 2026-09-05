@@ -2,14 +2,10 @@ import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PassportStrategy } from "@nestjs/passport";
 import { ExtractJwt, Strategy } from "passport-jwt";
-
-interface JwtPayload {
-  sub: string;
-  nickname: string;
-}
+import type { AuthUser, SessionTokenPayload } from "./auth.service";
 
 // Authorization: Bearer <token> 헤더에서 JWT를 꺼내 검증한다.
-// game-session 등 다른 서비스도 같은 JWT_SECRET으로 토큰을 로컬 검증할 수 있다(신원 브릿지).
+// game-session 도 같은 JWT_SECRET 으로 토큰을 로컬 검증한다(WS 핸드셰이크의 세션 쿠키).
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(config: ConfigService) {
@@ -20,8 +16,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  // 반환값이 req.user에 담긴다.
-  validate(payload: JwtPayload) {
-    return { userId: payload.sub, nickname: payload.nickname };
+  // 반환값이 req.user에 담긴다. 브라우저에 그대로 내려가는 모양(AuthUser)으로 맞춘다.
+  validate(payload: SessionTokenPayload): AuthUser {
+    return { id: payload.sub, username: payload.username, nickname: payload.nickname };
   }
 }

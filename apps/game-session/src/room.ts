@@ -12,6 +12,8 @@ const MAX_BUFFERED_STROKES = 3000;
 
 export interface Player {
   id: string;
+  /** 로그인한 플레이어면 users.id, 게스트면 null. 다른 참가자에게는 보내지 않고 전적 이벤트에만 싣는다. */
+  userId: string | null;
   nickname: string;
   socket: WebSocket;
   score: number;

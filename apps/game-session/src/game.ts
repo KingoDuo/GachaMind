@@ -114,7 +114,8 @@ export function endRound(room: Room): void {
 
 /** 점수순 등수를 매긴다. 동점이면 같은 등수를 주고, 다음 등수는 인원수만큼 건너뛴다. */
 function toResultPlayers(room: Room): GameResultPlayer[] {
-  const sorted = room.summaries.sort((a, b) => b.score - a.score);
+  // summaries 는 다른 참가자에게 보이는 모양이라 userId 가 없다. 전적에는 필요하므로 원본을 읽는다.
+  const sorted = [...room.players.values()].sort((a, b) => b.score - a.score);
 
   let rank = 0;
   let previousScore: number | null = null;
@@ -124,7 +125,13 @@ function toResultPlayers(room: Room): GameResultPlayer[] {
       rank = index + 1;
       previousScore = player.score;
     }
-    return { playerId: player.id, nickname: player.nickname, score: player.score, rank };
+    return {
+      playerId: player.id,
+      userId: player.userId,
+      nickname: player.nickname,
+      score: player.score,
+      rank,
+    };
   });
 }
 

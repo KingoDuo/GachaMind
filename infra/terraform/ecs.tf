@@ -22,6 +22,7 @@ locals {
   redis_url    = "redis://localhost:6379"
   rabbitmq_url = "amqp://localhost:5672"
   matchmaking  = "http://localhost:4000"
+  user         = "http://localhost:4010"
 
   # 서비스 정의. 키가 ECS 서비스 이름이 된다. 앱을 추가하거나 샤드를 늘리면 여기에 항목을 추가한다.
   #   image    실행할 이미지
@@ -55,7 +56,7 @@ locals {
         image  = local.ecr["web"]
         port   = 80
         memory = 384
-        env    = { PORT = "80", MATCHMAKING_URL = local.matchmaking }
+        env    = { PORT = "80", MATCHMAKING_URL = local.matchmaking, USER_URL = local.user }
       }
       matchmaking = {
         image  = local.ecr["matchmaking"]
@@ -93,6 +94,8 @@ locals {
           REDIS_URL       = local.redis_url
           RABBITMQ_URL    = local.rabbitmq_url
         }
+        # user 가 서명한 세션 토큰(WS 핸드셰이크 쿠키)을 같은 시크릿으로 로컬 검증한다.
+        secrets = { JWT_SECRET = aws_ssm_parameter.jwt_secret.arn }
       }
     },
   )

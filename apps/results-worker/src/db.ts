@@ -24,7 +24,7 @@ export async function ensureSchema(): Promise<void> {
     )
   `);
 
-  // user_id는 게스트 플레이라 지금은 항상 비어 있다. 인증이 붙으면 채워진다.
+  // user_id는 로그인한 플레이어면 users.id, 게스트면 null.
   // users 테이블의 주인이 user 서비스라 외래키는 아직 걸지 않는다.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS game_players (
@@ -72,9 +72,16 @@ export async function saveGameResult(event: GameFinishedEvent): Promise<boolean>
 
     for (const player of event.players) {
       await client.query(
-        `INSERT INTO game_players (game_id, player_id, nickname, score, "rank")
-         VALUES ($1, $2, $3, $4, $5)`,
-        [event.gameId, player.playerId, player.nickname, player.score, player.rank],
+        `INSERT INTO game_players (game_id, player_id, user_id, nickname, score, "rank")
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          event.gameId,
+          player.playerId,
+          player.userId ?? null,
+          player.nickname,
+          player.score,
+          player.rank,
+        ],
       );
     }
 

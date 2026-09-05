@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import {
+  MAX_NICKNAME_LENGTH,
   normalizeRoomCode,
   type ClientToServerMessage,
   type StrokeSegment,
@@ -19,6 +20,7 @@ import {
 import { notifyRoomClosed } from "./matchmaking.js";
 import { closeEventPublisher } from "./events.js";
 import { redis } from "./redis.js";
+import { identifyConnection, type Identity } from "./auth.js";
 
 /** 채팅 한 줄 최대 길이. 서버가 authority이므로 클라이언트 입력은 여기서 자른다. */
 const MAX_CHAT_LENGTH = 200;
@@ -48,6 +50,11 @@ interface ConnectionState {
   playerId: string | null;
   /** 방 배정 확인을 기다리는 중. 그 사이 도착한 join을 중복 처리하지 않으려고 둔다. */
   joining: boolean;
+  /**
+   * 핸드셰이크 쿠키로 알아낸 신원. 검증이 비동기라 join 이 먼저 도착할 수 있어 Promise 로 들고 있다.
+   * 게스트는 null 로 resolve 된다.
+   */
+  identity: Promise<Identity | null>;
 }
 
 async function handleJoin(
@@ -57,6 +64,14 @@ async function handleJoin(
 ): Promise<void> {
   if (state.joinedRoomId || state.joining) return;
   state.joining = true;
+
+  // 로그인한 사람은 닉네임도 토큰의 것을 쓴다. join 메시지의 닉네임은 게스트에게만 의미가 있다(사칭 방지).
+  // 방을 찾기 전에 기다려야 그 사이 방이 비어 정리되는 틈이 생기지 않는다.
+  const identity = await state.identity;
+  if (socket.readyState !== socket.OPEN) {
+    state.joining = false;
+    return;
+  }
 
   // 방 코드는 사람이 받아 적어 넘기는 값이라 표기가 흔들린다. 여기서 정규 형태로 맞춰야
   // 같은 방이 대소문자만 다른 코드로 두 개 생기지 않는다.
@@ -87,10 +102,11 @@ async function handleJoin(
   }
 
   const playerId = randomUUID();
-  const nickname = message.nickname.trim().slice(0, 20) || "익명";
+  const nickname =
+    (identity?.nickname ?? message.nickname).trim().slice(0, MAX_NICKNAME_LENGTH) || "익명";
   state.playerId = playerId;
   state.joinedRoomId = roomId;
-  room.addPlayer({ id: playerId, nickname, socket, score: 0 });
+  room.addPlayer({ id: playerId, userId: identity?.userId ?? null, nickname, socket, score: 0 });
 
   // 게임 중에 들어온 사람도 다음 라운드부터는 출제할 수 있게 순번 뒤에 붙인다.
   if (room.phase === "playing") room.drawerQueue.push(playerId);
@@ -124,7 +140,9 @@ async function handleJoin(
     playerId,
   );
   room.notice(`${nickname}님이 입장했습니다.`);
-  console.log(`[room ${room.id}] ${nickname} joined (${room.size})`);
+  console.log(
+    `[room ${room.id}] ${nickname} joined (${room.size})${identity ? ` user=${identity.username}` : " guest"}`,
+  );
   state.joining = false;
 }
 
@@ -237,8 +255,14 @@ startProjectionHeartbeat(roomManager);
 // (close 이벤트가 나면서 방에서도 빠진다). 네트워크가 조용히 끊긴 소켓이 방에 유령으로 남는 걸 막는다.
 const alive = new WeakSet<WebSocket>();
 
-wss.on("connection", (socket: WebSocket) => {
-  const state: ConnectionState = { joinedRoomId: null, playerId: null, joining: false };
+wss.on("connection", (socket: WebSocket, req) => {
+  const state: ConnectionState = {
+    joinedRoomId: null,
+    playerId: null,
+    joining: false,
+    // 쿠키 검증은 join 을 기다리지 않고 바로 시작한다. join 이 먼저 오면 handleJoin 이 이 Promise 를 기다린다.
+    identity: identifyConnection(req),
+  };
   alive.add(socket);
 
   socket.on("pong", () => alive.add(socket));

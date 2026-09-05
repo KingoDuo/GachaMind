@@ -11,7 +11,8 @@ services:
     ports: ["3000:3000"]
     environment:
       MATCHMAKING_URL: http://matchmaking:4000
-    depends_on: [matchmaking]
+      USER_URL: http://user:4010
+    depends_on: [matchmaking, user]
 
   game-session-1:
     build: { context: .., args: { SERVICE: game-session } }
@@ -22,6 +23,7 @@ services:
       MATCHMAKING_URL: http://matchmaking:4000
       REDIS_URL: redis://redis:6379
       RABBITMQ_URL: amqp://rabbitmq:5672
+      JWT_SECRET: dev-secret # user 가 서명한 세션 토큰을 검증한다. user 와 같은 값이어야 한다
     depends_on: [redis, rabbitmq]
 
   game-session-2:
@@ -33,6 +35,7 @@ services:
       MATCHMAKING_URL: http://matchmaking:4000
       REDIS_URL: redis://redis:6379
       RABBITMQ_URL: amqp://rabbitmq:5672
+      JWT_SECRET: dev-secret # user 가 서명한 세션 토큰을 검증한다. user 와 같은 값이어야 한다
     depends_on: [redis, rabbitmq]
 
   # ── 내부: web/서비스만 호출 → 호스트 포트 불필요 ──
@@ -51,6 +54,7 @@ services:
     environment:
       PORT: "4010"
       DATABASE_URL: postgresql://gachamind:gachamind@postgres:5432/gachamind
+      JWT_SECRET: dev-secret
     depends_on: [postgres]
 
   results-worker:
