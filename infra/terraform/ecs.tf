@@ -12,7 +12,8 @@
 # 배포: 무상태 서비스는 새 태스크가 헬스체크를 통과한 뒤 옛 태스크를 내리는 롤링(min 100 / max 200).
 # game-session 은 샤드 하나가 방을 메모리에 들고 있어 같은 샤드 둘이 공존하면 안 되므로 "내리고 올리기"(min 0 / max 100).
 #
-# 배치: 상태 있는 것(redis/postgres/rabbitmq)은 core 인스턴스에 고정(core = true), 나머지는 role=app 인스턴스에만 뜬다.
+# 배치: 상태 있는 것(redis/postgres/rabbitmq)은 core 인스턴스에 고정(core = true, launch_type EC2),
+# 나머지는 app capacity provider 로 띄운다 — app ASG 인스턴스에만 놓이고, 자리가 모자라면 ECS 가 인스턴스를 늘린다.
 # app 인스턴스가 여러 대면 같은 서비스의 태스크를 인스턴스에 고르게 퍼뜨린다(spread).
 
 resource "aws_ecs_cluster" "main" {
@@ -26,6 +27,36 @@ resource "aws_ecs_cluster" "main" {
   service_connect_defaults {
     namespace = aws_service_discovery_http_namespace.main.arn
   }
+}
+
+# app ASG 를 ECS 의 "용량 공급자"로 등록한다. 이게 EC2 자동 스케일링의 실체다.
+#   managed_scaling: 배치가 필요한 태스크 대비 인스턴스 수를 CapacityProviderReservation 지표로 계산해
+#     target_capacity(100 = 남는 인스턴스 없이 딱 맞게)를 유지하도록 ASG desired 를 조정한다.
+#     태스크가 안 들어가면 +1, 인스턴스가 비면 -1. 한 번에 한 대씩.
+#   managed_draining: 인스턴스를 끄기 전에 그 위의 태스크를 정상 종료시킨다(ASG lifecycle hook).
+#   managed_termination_protection 은 끈다 — 켜면 태스크가 하나라도 있는 인스턴스는 절대 안 줄여서,
+#     태스크가 움직이지 않는 이 구성에선 스케일인이 영영 안 일어난다.
+resource "aws_ecs_capacity_provider" "app" {
+  name = "gachamind-app"
+
+  auto_scaling_group_provider {
+    auto_scaling_group_arn         = aws_autoscaling_group.app.arn
+    managed_termination_protection = "DISABLED"
+    managed_draining               = "ENABLED"
+
+    managed_scaling {
+      status                    = "ENABLED"
+      target_capacity           = 100
+      minimum_scaling_step_size = 1
+      maximum_scaling_step_size = 1
+      instance_warmup_period    = 60
+    }
+  }
+}
+
+resource "aws_ecs_cluster_capacity_providers" "main" {
+  cluster_name       = aws_ecs_cluster.main.name
+  capacity_providers = [aws_ecs_capacity_provider.app.name]
 }
 
 # Service Connect 가 서비스 이름을 등록하는 Cloud Map 네임스페이스. DNS 존이 아니라 프록시가 조회하는 레지스트리다.
@@ -218,7 +249,20 @@ resource "aws_ecs_service" "svc" {
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.svc[each.key].arn
   desired_count   = 1
-  launch_type     = "EC2"
+
+  # core 는 capacity provider 밖의 고정 인스턴스라 launch_type EC2, app 은 capacity provider 로 띄운다.
+  # capacity provider 로 띄운 태스크만 관리형 스케일링의 계산에 들어간다.
+  launch_type = each.value.core ? "EC2" : null
+
+  dynamic "capacity_provider_strategy" {
+    for_each = each.value.core ? [] : [1]
+    content {
+      capacity_provider = aws_ecs_capacity_provider.app.name
+      weight            = 1
+    }
+  }
+  # capacity provider 전략을 바꾸는 갱신은 새 배포를 강제해야 받아들여진다(다른 변경이 없을 땐 영향 없음).
+  force_new_deployment = !each.value.core
 
   deployment_minimum_healthy_percent = each.value.rolling ? 100 : 0
   deployment_maximum_percent         = each.value.rolling ? 200 : 100
@@ -229,8 +273,8 @@ resource "aws_ecs_service" "svc" {
     rollback = true
   }
 
-  # 어느 인스턴스에 뜰지. core 는 인스턴스 ID 로 못 박고(속성을 달려면 user_data 를 바꿔야 해서 인스턴스가 교체된다),
-  # app 은 launch template 의 user_data 가 단 role 속성으로 고른다.
+  # 어느 인스턴스에 뜰지. core 는 인스턴스 ID 로 못 박는다(속성을 달려면 user_data 를 바꿔야 해서 인스턴스가 교체된다).
+  # app 은 capacity provider 가 이미 app ASG 인스턴스로 한정하지만, 의도를 드러내려고 role 속성 제약도 같이 둔다.
   placement_constraints {
     type       = "memberOf"
     expression = each.value.core ? "ec2InstanceId == ${aws_instance.ecs_host.id}" : "attribute:role == app"
@@ -286,6 +330,7 @@ resource "aws_ecs_service" "svc" {
   # 타깃그룹은 리스너에 묶인 뒤에야 서비스에 붙일 수 있다.
   depends_on = [
     terraform_data.wait_for_container_instance,
+    aws_ecs_cluster_capacity_providers.main,
     aws_lb_listener.https,
     aws_lb_listener_rule.game_session,
   ]

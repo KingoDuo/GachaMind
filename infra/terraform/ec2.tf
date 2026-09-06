@@ -82,6 +82,11 @@ resource "aws_launch_template" "app" {
   }
 }
 
+# 대수는 사람이 아니라 ECS capacity provider(ecs.tf)가 정한다:
+#   태스크를 놓을 자리가 모자라면 desired 를 올리고(부팅 후 40~60초 뒤 등록), 인스턴스가 남으면 내린다.
+#   줄일 때는 managed draining 이 그 인스턴스의 태스크를 정상 종료(SIGTERM → 방 정리 콜백)시킨 뒤 끈다.
+#   단, 그 인스턴스에 있던 game-session 샤드의 방은 끊긴다(샤드 상태는 메모리라 옮길 수 없다).
+# min 은 0 — 돌아가는 중엔 태스크가 자리를 요구해 어차피 1대 이상이고, 0 이어야 env.sh down 이 전부 끌 수 있다.
 resource "aws_autoscaling_group" "app" {
   name                = "gachamind-app"
   min_size            = 0
@@ -94,19 +99,22 @@ resource "aws_autoscaling_group" "app" {
     version = "$Latest"
   }
 
-  # ECS 에이전트가 클러스터에 붙으면 태스크가 배치된다. 여기까지 부팅 후 40~60초.
-  # 줄일 때는 먼저 컨테이너 인스턴스를 DRAINING 으로 바꿔 태스크를 옮긴 뒤 줄인다(infra/env.sh down).
-  # 그냥 desired 를 내리면 ASG 가 인스턴스를 바로 끄고, 그 위의 게임(방)은 끊긴다.
-
   tag {
     key                 = "Name"
     value               = "gachamind-app"
     propagate_at_launch = true
   }
 
+  # capacity provider 가 관리하는 ASG 라는 표시. ECS 가 이 태그로 자기 소유 인스턴스를 가린다.
+  tag {
+    key                 = "AmazonECSManaged"
+    value               = "true"
+    propagate_at_launch = true
+  }
+
   lifecycle {
-    # 켜고 끄는 건 Terraform 이 아니라 운영 명령(env.sh)이 한다. apply 가 desired 를 되돌리면 안 된다.
-    ignore_changes = [desired_capacity]
+    # desired 는 ECS 가, max 는 env.sh(down=0 / up=원래값)가 움직인다. apply 가 되돌리면 안 된다.
+    ignore_changes = [desired_capacity, max_size]
   }
 }
 

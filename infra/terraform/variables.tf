@@ -22,9 +22,12 @@ variable "app_instance_type" {
 }
 
 variable "app_instance_max" {
-  description = "app ASG 최대 인스턴스 수. desired 는 Terraform 이 아니라 infra/env.sh(aws autoscaling) 로 조정한다."
+  description = <<-EOT
+    app ASG 최대 인스턴스 수. 대수는 ECS capacity provider 가 태스크 배치 필요에 따라 0~max 사이에서 자동 조정한다.
+    infra/env.sh 가 down 때 max 를 0 으로, up 때 이 값으로 되돌린다(Terraform 은 max/desired 변경을 무시한다).
+  EOT
   type        = number
-  default     = 2
+  default     = 4
 }
 
 variable "image_tags" {
