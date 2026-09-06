@@ -42,31 +42,30 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# EC2 는 인터넷에서 직접 못 들어온다. ALB(lb.tf)에서 오는 web(80) + game-session 샤드(4001~) 트래픽만 받는다.
-# 내부 서비스(matchmaking/user/redis/postgres/rabbitmq)는 host 네트워크의 localhost 로만 통신하므로 열지 않는다.
-# SSH 도 열지 않는다 — 접속은 SSM Session Manager 로 한다.
+# EC2 는 인터넷에서 직접 못 들어온다.
+# 태스크는 bridge 네트워크의 동적 호스트 포트(32768~65535)로 열리므로 그 범위를
+#   - ALB 에서(web/game-session 타깃)
+#   - 같은 SG 의 인스턴스에서(Service Connect 프록시끼리 — 인스턴스가 여러 대일 때)
+# 만 받는다. SSH 도 열지 않는다 — 접속은 SSM Session Manager 로 한다.
 resource "aws_security_group" "ecs_host" {
   name        = "gachamind-ecs-host"
   description = "gachamind ECS container instance"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description     = "web from ALB"
-    from_port       = 80
-    to_port         = 80
+    description     = "ECS dynamic host ports from ALB"
+    from_port       = 32768
+    to_port         = 65535
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
 
-  dynamic "ingress" {
-    for_each = toset(var.game_session_ports)
-    content {
-      description     = "game-session ${ingress.value} from ALB"
-      from_port       = ingress.value
-      to_port         = ingress.value
-      protocol        = "tcp"
-      security_groups = [aws_security_group.alb.id]
-    }
+  ingress {
+    description = "ECS dynamic host ports between container instances (Service Connect)"
+    from_port   = 32768
+    to_port     = 65535
+    protocol    = "tcp"
+    self        = true
   }
 
   egress {

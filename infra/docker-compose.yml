@@ -45,7 +45,7 @@ services:
     environment:
       PORT: "4000"
       REDIS_URL: redis://redis:6379
-      GAME_SESSION_PORTS: "4001,4002"
+      GAME_SESSION_SHARDS: "4001,4002" # 로컬은 샤드 이름 = 포트(SHARD_ID 미설정 → 포트가 이름)
     depends_on: [redis]
 
   user:

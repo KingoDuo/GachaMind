@@ -1,6 +1,9 @@
-# ECS 컨테이너 인스턴스 한 대. ECS 최적화 AMI(arm64)를 SSM 공개 파라미터에서 가져온다.
-# 부팅 시 user_data 로 "어느 클러스터에 등록할지"만 알려주면 ECS 에이전트가 알아서 붙는다.
-# 공인 IP 는 아웃바운드(이미지 pull, 패키지)용으로만 쓴다. 인바운드는 ALB 를 거친다.
+# ECS 컨테이너 인스턴스는 두 부류다. ECS 최적화 AMI(arm64)를 SSM 공개 파라미터에서 가져온다.
+#   core  한 대 고정(aws_instance). 상태 있는 것(redis/postgres/rabbitmq)만 여기 뜬다.
+#         Postgres 데이터가 이 인스턴스 디스크에 있어 갈아엎으면 사라진다 — 그래서 ASG 가 아니다.
+#   app   ASG(0~N대). 무상태 앱과 game-session 샤드가 여기 뜬다. 인스턴스는 소모품이라 아무 때나 늘리고 줄인다.
+# 어느 태스크가 어디에 뜨는지는 ecs.tf 의 placement_constraints 가 정한다(core 는 인스턴스 ID, app 은 role 속성).
+# 공인 IP 는 아웃바운드(이미지 pull)용으로만 쓴다. 인바운드는 ALB 를 거친다.
 
 data "aws_ssm_parameter" "ecs_ami" {
   name = "/aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id"
@@ -33,6 +36,85 @@ resource "aws_instance" "ecs_host" {
 
   lifecycle {
     ignore_changes = [ami] # AMI 가 갱신될 때마다 인스턴스를 갈아엎지 않는다
+  }
+}
+
+# ── app 인스턴스: launch template + ASG ──
+# core 와 같은 AMI/롤/SG 를 쓰고, user_data 로 role=app 속성을 달아 ECS 가 무상태 태스크만 여기 두게 한다.
+# core 와 같은 서브넷(AZ)에 둔다 — Service Connect 트래픽이 AZ 를 넘으면 전송 요금과 지연이 붙는다.
+resource "aws_launch_template" "app" {
+  name          = "gachamind-app"
+  image_id      = data.aws_ssm_parameter.ecs_ami.value
+  instance_type = var.app_instance_type
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.ecs_instance.name
+  }
+
+  vpc_security_group_ids = [aws_security_group.ecs_host.id]
+
+  user_data = base64encode(<<-EOT
+    #!/bin/bash
+    echo "ECS_CLUSTER=${aws_ecs_cluster.main.name}" >> /etc/ecs/ecs.config
+    echo 'ECS_INSTANCE_ATTRIBUTES={"role":"app"}' >> /etc/ecs/ecs.config
+  EOT
+  )
+
+  block_device_mappings {
+    device_name = "/dev/xvda"
+    ebs {
+      volume_size = 30
+      volume_type = "gp3"
+    }
+  }
+
+  metadata_options {
+    http_tokens = "required" # IMDSv2
+  }
+
+  tag_specifications {
+    resource_type = "instance"
+    tags          = { Name = "gachamind-app" }
+  }
+
+  lifecycle {
+    ignore_changes = [image_id] # core 와 같은 이유. 갱신하려면 새 인스턴스를 띄우면 된다(소모품).
+  }
+}
+
+# 대수는 사람이 아니라 ECS capacity provider(ecs.tf)가 정한다:
+#   태스크를 놓을 자리가 모자라면 desired 를 올리고(부팅 후 40~60초 뒤 등록), 인스턴스가 남으면 내린다.
+#   줄일 때는 managed draining 이 그 인스턴스의 태스크를 정상 종료(SIGTERM → 방 정리 콜백)시킨 뒤 끈다.
+#   단, 그 인스턴스에 있던 game-session 샤드의 방은 끊긴다(샤드 상태는 메모리라 옮길 수 없다).
+# min 은 0 — 돌아가는 중엔 태스크가 자리를 요구해 어차피 1대 이상이고, 0 이어야 env.sh down 이 전부 끌 수 있다.
+resource "aws_autoscaling_group" "app" {
+  name                = "gachamind-app"
+  min_size            = 0
+  max_size            = var.app_instance_max
+  desired_capacity    = 0
+  vpc_zone_identifier = [aws_subnet.public[0].id]
+
+  launch_template {
+    id      = aws_launch_template.app.id
+    version = "$Latest"
+  }
+
+  tag {
+    key                 = "Name"
+    value               = "gachamind-app"
+    propagate_at_launch = true
+  }
+
+  # capacity provider 가 관리하는 ASG 라는 표시. ECS 가 이 태그로 자기 소유 인스턴스를 가린다.
+  tag {
+    key                 = "AmazonECSManaged"
+    value               = "true"
+    propagate_at_launch = true
+  }
+
+  lifecycle {
+    # desired 는 ECS 가, max 는 env.sh(down=0 / up=원래값)가 움직인다. apply 가 되돌리면 안 된다.
+    ignore_changes = [desired_capacity, max_size]
   }
 }
 

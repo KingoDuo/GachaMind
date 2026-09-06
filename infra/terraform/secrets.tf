@@ -18,11 +18,11 @@ resource "aws_ssm_parameter" "postgres_password" {
   value = random_password.postgres.result
 }
 
-# user / results-worker 가 읽는 접속 문자열. host 네트워크라 localhost.
+# user / results-worker 가 읽는 접속 문자열. 호스트명은 Service Connect 이름(ecs.tf).
 resource "aws_ssm_parameter" "database_url" {
   name  = "/gachamind/database_url"
   type  = "SecureString"
-  value = "postgresql://gachamind:${random_password.postgres.result}@localhost:5432/gachamind"
+  value = "postgresql://gachamind:${random_password.postgres.result}@postgres:5432/gachamind"
 }
 
 resource "aws_ssm_parameter" "jwt_secret" {
