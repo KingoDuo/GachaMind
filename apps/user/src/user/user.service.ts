@@ -10,16 +10,16 @@ export class UserService {
     @InjectRepository(User) private readonly users: Repository<User>,
   ) {}
 
-  findByNickname(nickname: string): Promise<User | null> {
-    return this.users.findOne({ where: { nickname } });
+  findByUsername(username: string): Promise<User | null> {
+    return this.users.findOne({ where: { username } });
   }
 
   findById(id: string): Promise<User | null> {
     return this.users.findOne({ where: { id } });
   }
 
-  create(nickname: string, passwordHash: string): Promise<User> {
-    const user = this.users.create({ nickname, passwordHash });
+  create(username: string, nickname: string, passwordHash: string): Promise<User> {
+    const user = this.users.create({ username, nickname, passwordHash });
     return this.users.save(user);
   }
 }

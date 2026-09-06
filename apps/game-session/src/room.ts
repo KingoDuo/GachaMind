@@ -12,6 +12,8 @@ const MAX_BUFFERED_STROKES = 3000;
 
 export interface Player {
   id: string;
+  /** 로그인한 플레이어면 users.id, 게스트면 null. 다른 참가자에게는 보내지 않고 전적 이벤트에만 싣는다. */
+  userId: string | null;
   nickname: string;
   socket: WebSocket;
   score: number;
@@ -30,6 +32,12 @@ export class Room {
   drawerId: string | null = null;
   word: string | null = null;
   roundEndsAt: number | null = null;
+
+  /** 지금 시점의 라운드 남은 시간(ms). 클라이언트에는 절대 시각 대신 이 값을 보낸다. */
+  get remainingMs(): number | null {
+    if (this.roundEndsAt === null) return null;
+    return Math.max(0, this.roundEndsAt - Date.now());
+  }
 
   /** 현재 라운드에 그려진 선분. 중간에 들어온 사람에게 그대로 재생해준다. */
   strokes: StrokeSegment[] = [];

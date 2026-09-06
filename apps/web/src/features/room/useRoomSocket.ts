@@ -25,6 +25,10 @@ export interface GameState {
   totalRounds: number;
   drawerId: string | null;
   drawerNickname: string | null;
+  /**
+   * 라운드 마감 시각. 서버가 준 남은 시간(remainingMs)을 받은 순간 **이 기기 시계** 기준으로 환산한 값이라,
+   * 서버와 클라의 시계가 어긋나도 타이머가 틀어지지 않는다.
+   */
   roundEndsAt: number | null;
   wordLength: number | null;
   /** 출제자 본인에게만 채워진다. */
@@ -64,6 +68,11 @@ const INITIAL_GAME: GameState = {
 
 /** 피드가 무한히 길어지지 않도록 최근 것만 남긴다. */
 const MAX_FEED_ENTRIES = 200;
+
+/** 서버가 준 남은 시간을 이 기기 시계 기준 마감 시각으로 바꾼다. */
+function toLocalDeadline(remainingMs: number | null): number | null {
+  return remainingMs === null ? null : Date.now() + remainingMs;
+}
 
 /** 닉네임이 아직 정해지지 않았으면(null) 접속하지 않는다. 익명으로 들어갔다가 다시 붙는 걸 막는다. */
 export function useRoomSocket(roomId: string, nickname: string | null) {
@@ -143,7 +152,7 @@ export function useRoomSocket(roomId: string, nickname: string | null) {
               drawerId: message.drawerId,
               drawerNickname:
                 message.players.find((p) => p.id === message.drawerId)?.nickname ?? null,
-              roundEndsAt: message.roundEndsAt,
+              roundEndsAt: toLocalDeadline(message.remainingMs),
               wordLength: message.wordLength,
               word: null,
               solvedIds: [],
@@ -212,7 +221,7 @@ export function useRoomSocket(roomId: string, nickname: string | null) {
               totalRounds: message.totalRounds,
               drawerId: message.drawerId,
               drawerNickname: message.drawerNickname,
-              roundEndsAt: message.roundEndsAt,
+              roundEndsAt: toLocalDeadline(message.remainingMs),
               wordLength: message.wordLength,
               word: message.word ?? null,
               solvedIds: [],

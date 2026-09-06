@@ -11,6 +11,7 @@
     "@gachamind/shared": "workspace:*",
     "amqplib": "^0.10.9",
     "ioredis": "^5.11.1",
+    "jose": "^6.2.10",
     "tsx": "^4.19.2",
     "ws": "^8.18.0"
   },

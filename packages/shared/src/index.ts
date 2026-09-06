@@ -16,6 +16,54 @@ export interface RoomListResponse {
   rooms: RoomSummary[];
 }
 
+// 계정 / 세션 (web - user - game-session)
+//
+// user 서비스는 nest build(tsc, rootDir=src) 제약으로 이 패키지를 import하지 못한다.
+// 그래서 아래 규칙은 apps/user/src/auth/rules.ts 에 같은 값으로 한 벌 더 있다. 바꿀 때 둘 다 바꾼다.
+
+/** 화면에 보이는 이름. 게스트와 계정 모두 같은 규칙을 쓴다. */
+export const MAX_NICKNAME_LENGTH = 20;
+
+/** 로그인 아이디. 공백을 뺀 출력 가능한 ASCII(영문·숫자·특수문자)만. 길이 상한은 없다. */
+export const USERNAME_PATTERN = /^[\x21-\x7E]+$/;
+
+/** 비밀번호. 아이디 규칙에 공백만 더 허용한다. */
+export const PASSWORD_PATTERN = /^[\x20-\x7E]+$/;
+
+/** bcrypt는 72바이트 이후를 무시하므로 그 앞에서 자른다. */
+export const MAX_PASSWORD_LENGTH = 72;
+
+/**
+ * web(BFF)이 브라우저에 심는 세션 쿠키 이름. 값은 user 서비스가 발급한 JWT다.
+ * httpOnly라 JS는 못 읽지만, 같은 도메인(로컬은 같은 호스트)의 game-session WS 핸드셰이크에는 자동으로 실린다.
+ * game-session은 이 쿠키로 "누구"인지 안다. 없으면 게스트.
+ */
+export const SESSION_COOKIE_NAME = "gachamind_session";
+
+/** 세션(JWT·쿠키) 수명. refresh 토큰 없이 단순하게 간다. */
+export const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+/** user 서비스가 서명하는 JWT 본문. game-session이 같은 JWT_SECRET으로 로컬 검증해 읽는다. */
+export interface SessionTokenPayload {
+  /** users.id */
+  sub: string;
+  username: string;
+  nickname: string;
+}
+
+/** 브라우저에 노출되는 계정 정보. passwordHash 같은 내부 값은 담지 않는다. */
+export interface AuthUser {
+  id: string;
+  username: string;
+  nickname: string;
+}
+
+/** user 서비스의 /auth/signup, /auth/login 응답. web은 accessToken을 쿠키로 바꾸고 user만 브라우저에 준다. */
+export interface AuthResponse {
+  accessToken: string;
+  user: AuthUser;
+}
+
 // 게임 규칙 상수. 서버가 authority지만 클라이언트도 진행바 계산에 쓴다.
 
 /** 방 하나의 최대 인원. matchmaking(Redis 기록)과 game-session(Room 정원)이 값을 공유한다. */
@@ -100,8 +148,12 @@ export interface RoomStateMessage {
   round: number;
   totalRounds: number;
   drawerId: string | null;
-  /** 진행 중인 라운드의 남은 시간 기준시각(epoch ms). 대기 중이면 null. */
-  roundEndsAt: number | null;
+  /**
+   * 진행 중인 라운드의 남은 시간(ms). 대기 중이면 null.
+   * 절대 시각(epoch)이 아니라 서버가 보내는 순간 계산한 남은 양이다.
+   * 클라이언트 시계가 서버와 어긋나도 타이머가 틀어지지 않도록, 클라는 받은 시각부터 자기 시계로만 센다.
+   */
+  remainingMs: number | null;
   /** 비출제자에게는 제시어 대신 글자 수만 준다. */
   wordLength: number | null;
   strokes: StrokeSegment[];
@@ -169,7 +221,8 @@ export interface RoundStartedMessage {
   totalRounds: number;
   drawerId: string;
   drawerNickname: string;
-  roundEndsAt: number;
+  /** 라운드 남은 시간(ms). RoomStateMessage.remainingMs와 같은 의미. */
+  remainingMs: number;
   wordLength: number;
   word?: string;
 }
@@ -320,6 +373,8 @@ export const GAME_EVENTS_QUEUE = "game.events";
 /** 게임 한 판의 플레이어별 결과. */
 export interface GameResultPlayer {
   playerId: string;
+  /** 로그인한 플레이어면 users.id, 게스트면 null. 전적은 이 값이 있는 행만 "누구"에게 귀속된다. */
+  userId: string | null;
   nickname: string;
   score: number;
   /** 1등부터. 동점이면 같은 등수를 준다. */

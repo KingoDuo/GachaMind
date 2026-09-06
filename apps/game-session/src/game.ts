@@ -78,7 +78,7 @@ export function startRound(room: Room): void {
     totalRounds: room.totalRounds,
     drawerId: drawer.id,
     drawerNickname: drawer.nickname,
-    roundEndsAt: room.roundEndsAt,
+    remainingMs: room.remainingMs ?? ROUND_DURATION_MS,
     wordLength: room.word.length,
   };
   // 제시어 본문은 출제자에게만. 나머지는 글자 수만 받는다.
@@ -114,7 +114,8 @@ export function endRound(room: Room): void {
 
 /** 점수순 등수를 매긴다. 동점이면 같은 등수를 주고, 다음 등수는 인원수만큼 건너뛴다. */
 function toResultPlayers(room: Room): GameResultPlayer[] {
-  const sorted = room.summaries.sort((a, b) => b.score - a.score);
+  // summaries 는 다른 참가자에게 보이는 모양이라 userId 가 없다. 전적에는 필요하므로 원본을 읽는다.
+  const sorted = [...room.players.values()].sort((a, b) => b.score - a.score);
 
   let rank = 0;
   let previousScore: number | null = null;
@@ -124,7 +125,13 @@ function toResultPlayers(room: Room): GameResultPlayer[] {
       rank = index + 1;
       previousScore = player.score;
     }
-    return { playerId: player.id, nickname: player.nickname, score: player.score, rank };
+    return {
+      playerId: player.id,
+      userId: player.userId,
+      nickname: player.nickname,
+      score: player.score,
+      rank,
+    };
   });
 }
 
@@ -173,8 +180,7 @@ export function handleGuess(room: Room, player: Player, text: string): boolean {
   if (isGuesser && guess === answer) {
     room.solvedPlayerIds.add(player.id);
 
-    const remaining = Math.max(0, (room.roundEndsAt ?? 0) - Date.now());
-    const speedRatio = remaining / ROUND_DURATION_MS;
+    const speedRatio = (room.remainingMs ?? 0) / ROUND_DURATION_MS;
     player.score += BASE_ANSWER_SCORE + Math.round(SPEED_BONUS_SCORE * speedRatio);
 
     const drawer = room.drawerId ? room.players.get(room.drawerId) : undefined;

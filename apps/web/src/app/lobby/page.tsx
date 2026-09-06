@@ -1,7 +1,8 @@
 "use client";
 
+import { logout, useSession } from "@/features/auth/client";
 import { RoomList } from "@/features/lobby/RoomList";
-import { useNickname } from "@/features/player/nickname";
+import { clearNickname, useNickname } from "@/features/player/nickname";
 import { XpWindow } from "@/features/ui/XpWindow";
 import {
   ROOM_CODE_LENGTH,
@@ -16,6 +17,8 @@ import { useCallback, useEffect, useState } from "react";
 export default function LobbyPage() {
   const router = useRouter();
   const { nickname, ready } = useNickname();
+  // 로그인 여부는 헤더 버튼(닉네임 변경 ↔ 로그아웃)에만 쓴다. 방 입장 흐름은 게스트와 같다.
+  const session = useSession();
 
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -72,6 +75,12 @@ export default function LobbyPage() {
     }
   }
 
+  async function handleLogout() {
+    await logout();
+    clearNickname();
+    router.replace("/");
+  }
+
   function handleJoinByCode() {
     if (!isRoomCode(joinCode)) {
       setActionError(`방 코드는 ${ROOM_CODE_LENGTH}자리입니다.`);
@@ -101,11 +110,20 @@ export default function LobbyPage() {
           </span>
           <div className="min-w-0">
             <h1 className="text-lg font-bold">로비</h1>
-            <p className="truncate text-xs text-muted">{nickname}님, 어서 오세요</p>
+            <p className="truncate text-xs text-muted">
+              {nickname}님, 어서 오세요
+              {session.user && <span> · {session.user.username}</span>}
+            </p>
           </div>
-          <button onClick={() => router.push("/")} className="xp-button ml-auto shrink-0">
-            닉네임 변경
-          </button>
+          {session.user ? (
+            <button onClick={handleLogout} className="xp-button ml-auto shrink-0">
+              로그아웃
+            </button>
+          ) : (
+            <button onClick={() => router.push("/")} className="xp-button ml-auto shrink-0">
+              닉네임 변경
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2">

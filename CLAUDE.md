@@ -58,7 +58,7 @@
 
 ### Redis
 - **확정 용도 — 방 매칭 공유상태**: game-session이 여러 replica에 흩어져 있으므로, 어떤 방이 어느 포트에 열려 있고 입장 가능한지를 프로세스 경계 너머로 공유해야 한다. matchmaking이 이 인덱스를 읽는다.
-- **향후 용도 — 세션/신원 브릿지**: user가 로그인 토큰을 발급하고 game-session이 검증할 때, 공유 세션 저장소로 쓸 수 있다(JWT 로컬검증 vs Redis 세션 중 택1).
+- **세션/신원 브릿지에는 쓰지 않는다**: user가 발급한 JWT를 game-session이 같은 `JWT_SECRET`으로 로컬 검증한다(아래 "계정과 세션"). join 핫패스에 Redis 조회가 생기지 않는다.
 - **클라이언트는 `ioredis`로 통일** — Redis를 쓰는 모든 서비스는 node-redis가 아니라 ioredis를 쓴다(자동 연결·재연결, Cluster/Sentinel 성숙, BullMQ 등 생태계 호환). 명령어는 소문자(`hset`/`hgetall`).
 - 휘발성 원칙에 따라 영속 볼륨 없이 운영.
 
@@ -70,22 +70,29 @@
 - 로비/인게임 화면 모두 **같은 Next.js 앱**의 다른 라우트로 렌더링. game-session은 화면을 그리지 않는 headless 서버.
 - 화면은 셋: `/`(닉네임 입력) → `/lobby`(방 목록·방 만들기·빠른 시작·코드 입장) → `/room/{코드}`(게임).
 - 방 목록은 `GET /api/rooms` → matchmaking `GET /rooms`. **최초 진입 1회 + 새로고침 버튼**으로만 받는 스냅샷이다(폴링·구독 없음). 참여 가능한 방(`rooms:joinable`)만 나오므로 정원이 찬 방과 아직 아무도 접속하지 않은 예약 방은 빠진다.
-- 닉네임은 sessionStorage(`gachamind:nickname`)에 둔다. 쿼리스트링으로 나르면 방 링크를 복사해 줄 때 남의 닉네임이 따라간다. 닉네임 없이 방 링크로 들어오면 `/?next=/room/{코드}`로 보내 입력받고 되돌린다.
+- 닉네임은 sessionStorage(`gachamind:nickname`)에 둔다. 쿼리스트링으로 나르면 방 링크를 복사해 줄 때 남의 닉네임이 따라간다. 닉네임 없이 방 링크로 들어오면 `/?next=/room/{코드}`로 보내 입력받고 되돌린다. 로그인한 사람도 같은 자리에 계정 닉네임을 넣으므로 로비·방 화면은 게스트/회원을 구분하지 않는다.
+
+### 계정과 세션
+- **게스트와 회원이 공존**한다. 입구(`/`)에서 아이디/비밀번호로 가입·로그인하거나, 닉네임만 넣고 "게스트로 플레이"한다. 회원은 `users.username`(로그인 아이디, unique, 공백 뺀 출력 가능 ASCII)과 `users.nickname`(표시용, 중복 허용, 게스트와 같은 규칙)을 갖는다. 비밀번호는 1~72자(bcrypt 한계) 출력 가능 ASCII. 규칙 상수는 `packages/shared`에 있고, user 서비스는 빌드 제약으로 `apps/user/src/auth/rules.ts`에 같은 값을 한 벌 더 둔다.
+- **세션은 httpOnly 쿠키**(`gachamind_session`, 7일). 브라우저 → web `/api/auth/{signup,login,logout,me}` → user `/auth/*`. web이 user가 준 JWT를 쿠키로 심고, 다시 부를 땐 쿠키를 Bearer로 바꿔 user에 전달한다. 브라우저 JS는 토큰을 만지지 않고, user 서비스는 외부에 노출되지 않는다.
+- **game-session은 WS 핸드셰이크의 쿠키로 "누구"인지 안다.** 같은 도메인(로컬은 같은 호스트)이라 쿠키가 자동으로 실리고, `JWT_SECRET`으로 로컬 검증한다(`apps/game-session/src/auth.ts`). 유효하면 닉네임·userId를 토큰에서 쓰고(join 메시지의 닉네임은 무시, 사칭 방지), 없거나 깨졌으면 게스트(userId null). 접속을 막지는 않는다.
+- 전적(`game_players.user_id`)은 회원만 채워지고 게스트는 null. 전적 **조회** API와 화면은 아직 없다(다음 단계: 누가 `game_players`를 읽을지 정하기).
 
 ### 제외/유보된 것
 - **Nginx/게이트웨이**: 로컬 개발 범위에선 제외(각 서비스에 직접 포트로 접속). 라우팅이 복잡해지면 그때 도입.
 - **하트비트·자동 재연결**: 아직 미구현. game-session에 ping/pong(죽은 연결 정리)과 클라 재연결은 반드시 채워야 할 자리.
 - **로그인 강제**: 게스트(익명 닉네임) 플레이를 유지하고, 회원가입은 선택.
+- **비밀번호 찾기·닉네임 변경·refresh 토큰**: 없음. 세션은 7일 JWT 하나로 끝.
 
 ## 디렉토리 구조
 ```
 apps/
-  web/             # Next.js — UI + BFF.  /api/rooms 는 matchmaking으로 프록시
-                   #   app/(입구) app/lobby app/room/[roomId], features/{lobby,room,player,ui}
+  web/             # Next.js — UI + BFF.  /api/rooms 는 matchmaking, /api/auth 는 user 로 프록시(세션 쿠키↔토큰)
+                   #   app/(입구) app/lobby app/room/[roomId], features/{auth,lobby,room,player,ui}
   matchmaking/     # Fastify — 방 배정 (Redis 매칭 상태 소유)
   game-session/    # ws — 실시간 authority. src/room.ts(Room/RoomManager), src/index.ts
-  user/            # NestJS + TypeORM(Postgres). 가입·프로필·전적
-  results-worker/  # Node + amqplib — 게임 이벤트 소비 → user DB
+  user/            # NestJS + TypeORM(Postgres). 가입·로그인·JWT 발급 (users 테이블 소유)
+  results-worker/  # Node + amqplib — 게임 이벤트 소비 → games/game_players 기록
 packages/
   shared/          # 서비스 간 계약 (메시지 타입, Redis 키, MQ 이벤트 스키마)
 infra/
@@ -114,14 +121,14 @@ Docker 이미지는 루트 `Dockerfile` 하나로 만든다(`--build-arg SERVICE
 - **현재 형태(1단계)**: ECS on EC2 **한 대**(t4g.medium, arm64) + `host` 네트워크. compose 의 서비스 9개가 ECS 서비스 9개로 1:1 대응하고, 서로를 `localhost:PORT` 로 부른다(로컬 `pnpm dev` 구성과 같은 모양). Redis/Postgres/RabbitMQ 도 아직 컨테이너(Postgres 는 `/data/postgres` 호스트 볼륨).
 - **입구는 ALB + ACM(HTTPS)**: Route53 apex/www → ALB Alias. `:80`→443 리다이렉트, `:443` 기본 → web(EC2:80), **`/gs/{port}/*` → 해당 game-session 샤드(EC2:{port})**. EC2 SG 는 ALB 에서 오는 트래픽만 허용(직접 접근 불가). 클라이언트는 https 페이지면 `wss://도메인/gs/{port}`, http(로컬)면 `ws://host:{port}` 로 붙는다(`useRoomSocket.ts`). game-session 은 같은 포트에 `GET /health`(ALB 헬스체크)와 30s WS ping(ALB idle timeout·유령 연결 정리)을 가진다.
 - 비밀값(Postgres 비밀번호, `DATABASE_URL`, `JWT_SECRET`)은 Terraform 이 생성해 SSM Parameter Store 에 두고 태스크 정의가 ARN 으로 참조한다.
-- 배포: **main 에 push 하면 GitHub Actions**(`.github/workflows/deploy.yml`)가 바뀐 앱만 arm64 이미지로 빌드(QEMU)·ECR push(태그 = 커밋 sha)하고, `image_tags` map(바뀐 앱 = 새 sha, 나머지 = 지금 배포된 태그)으로 `terraform apply` → 바뀐 서비스만 재시작(인스턴스 1대라 몇 초 끊김). `packages/shared`·`Dockerfile`·lockfile 이 바뀌면 전부. AWS 권한은 OIDC 롤 `gachamind-github-deploy`(main 브랜치만). 수동 배포는 `infra/deploy.sh [all|build|push|apply] [service ...]`.
+- 브랜치: 기본 브랜치는 **`dev`**(작업 브랜치). `main` 은 배포 브랜치라 직접 push 를 막고 **dev → main PR 머지로만** 반영한다(GitHub ruleset `protect-main`: PR 필수·force push/삭제 금지). main 에 머지되는 순간이 배포 시점. EC2 가 정지 중이면 apply 는 성공하되 새 태스크는 EC2 를 켤 때까지 대기한다(circuit breaker 가 롤백했으면 `deploy.sh apply` 로 다시 밀기).
+- 배포: **main 에 push 되면 GitHub Actions**(`.github/workflows/deploy.yml`)가 바뀐 앱만 arm64 이미지로 빌드(QEMU)·ECR push(태그 = 커밋 sha)하고, `image_tags` map(바뀐 앱 = 새 sha, 나머지 = 지금 배포된 태그)으로 `terraform apply` → 바뀐 서비스만 재시작(인스턴스 1대라 몇 초 끊김). `packages/shared`·`Dockerfile`·lockfile 이 바뀌면 전부. AWS 권한은 OIDC 롤 `gachamind-github-deploy`(main 브랜치만). 수동 배포는 `infra/deploy.sh [all|build|push|apply] [service ...]`.
 - 접속/로그: SSH 없음. `aws ssm start-session --target <instance_id>`, 로그는 CloudWatch `/gachamind/<service>`.
 - 다음 단계(미정): EC2 2대 이상 시 내부통신(Service Connect)·game-session 라우팅·관리형 DB 분리, 배포 자동화(GitHub Actions, 바뀐 서비스만).
 
-## 현재 상태 (스캐폴딩)
-각 서비스는 **부팅 + health 응답 수준**이고, 실제 로직은 `TODO` 주석 자리에서 채워나간다:
-- matchmaking: `/assign`·`/rooms` 가 501 stub — Redis 매칭·least-conn 배정 구현 필요.
-- game-session: join/leave 브로드캐스트만 — 드로잉/채팅/정답판정/게임루프, Redis occupancy 동기화, matchmaking 콜백 구현 필요.
-- user: `/health` + TypeORM 연결 + `User` 엔티티 뼈대만 — 엔티티 확정, 인증(가입/로그인/토큰), 프로필·전적 API 구현 필요. (`synchronize: true`는 dev 편의, 프로덕션 전 마이그레이션으로 전환)
-- results-worker: 부팅 로그만 — amqplib 연결·`game.events` 소비·user DB 기록 구현 필요.
+## 현재 상태
+- matchmaking: Redis 매칭·least-conn 배정·방 목록 구현됨.
+- game-session: 드로잉/채팅/정답판정/게임루프, Redis occupancy 동기화, matchmaking 콜백, 세션 쿠키 신원 확인 구현됨. 클라이언트 자동 재연결은 없음.
+- user: 가입/로그인/`me` 구현됨. 프로필·전적 조회 API는 없음. (`synchronize: true`는 dev 편의, 프로덕션 전 마이그레이션으로 전환. `users`에 `username` 컬럼이 추가돼 이전 스키마의 행이 있으면 기동이 실패한다 → 테이블을 비우고 다시 띄운다)
+- results-worker: `game.events` 소비 → `games`/`game_players` 기록 구현됨(멱등). 이 두 테이블은 worker가 직접 만든다 — "user만 DB 소유" 원칙과 어긋나는 지점이라 전적 조회를 붙일 때 정리한다.
 - 공유 계약(`packages/shared`)에 이미 메시지 타입/Redis 키/이벤트 스키마의 뼈대가 있다.
