@@ -118,13 +118,14 @@ Docker 이미지는 루트 `Dockerfile` 하나로 만든다(`--build-arg SERVICE
 
 ## AWS 배포
 계정 `472227100986` / 서울(`ap-northeast-2`) / 도메인 `gachamind.com`(Route53). 인프라는 `infra/terraform`(Terraform, 상태는 S3 `gachamind-tfstate-…`), 배포는 `infra/deploy.sh`.
-- **현재 형태(1단계)**: ECS on EC2 **한 대**(t4g.medium, arm64) + `host` 네트워크. compose 의 서비스 9개가 ECS 서비스 9개로 1:1 대응하고, 서로를 `localhost:PORT` 로 부른다(로컬 `pnpm dev` 구성과 같은 모양). Redis/Postgres/RabbitMQ 도 아직 컨테이너(Postgres 는 `/data/postgres` 호스트 볼륨).
-- **입구는 ALB + ACM(HTTPS)**: Route53 apex/www → ALB Alias. `:80`→443 리다이렉트, `:443` 기본 → web(EC2:80), **`/gs/{port}/*` → 해당 game-session 샤드(EC2:{port})**. EC2 SG 는 ALB 에서 오는 트래픽만 허용(직접 접근 불가). 클라이언트는 https 페이지면 `wss://도메인/gs/{port}`, http(로컬)면 `ws://host:{port}` 로 붙는다(`useRoomSocket.ts`). game-session 은 같은 포트에 `GET /health`(ALB 헬스체크)와 30s WS ping(ALB idle timeout·유령 연결 정리)을 가진다.
+- **현재 형태**: ECS on EC2 **한 대**(t4g.medium, arm64) + `bridge` 네트워크·동적 호스트 포트. compose 의 서비스 9개가 ECS 서비스 9개로 1:1 대응한다. 서비스 간 호출은 **ECS Service Connect** 로 compose 와 같은 이름(`http://matchmaking:4000`, `redis://redis:6379`, `postgres:5432`)을 쓴다 — 태스크마다 붙는 프록시가 이름을 실제 (인스턴스, 포트)로 풀어주므로 인스턴스가 늘어도 env 값이 안 바뀐다. Redis/Postgres/RabbitMQ 도 아직 컨테이너(Postgres 는 `/data/postgres` 호스트 볼륨).
+- **ALB ↔ ECS 연동**: 타깃그룹의 내용물은 Terraform 이 아니라 **ECS 가 채운다**(`aws_ecs_service.load_balancer`). 태스크가 뜨면 (인스턴스, 동적 포트)가 등록되고 내려가면 빠진다. 무상태 서비스는 롤링(min 100/max 200)이라 새 태스크가 헬스체크를 통과한 뒤 옛 태스크가 빠지고, game-session 샤드·postgres 는 같은 것 둘이 공존하면 안 되므로 "내리고 올리기"(min 0/max 100). web `desired_count` 를 2로 올리면 ALB 가 두 태스크로 분산한다.
+- **입구는 ALB + ACM(HTTPS)**: Route53 apex/www → ALB Alias. `:80`→443 리다이렉트, `:443` 기본 → web 타깃그룹, **`/gs/{port}/*` → 해당 game-session 샤드 타깃그룹**. EC2 SG 는 동적 포트 범위(32768~65535)를 ALB 와 같은 SG(Service Connect 프록시 간)에서만 받는다. 클라이언트는 https 페이지면 `wss://도메인/gs/{port}`, http(로컬)면 `ws://host:{port}` 로 붙는다(`useRoomSocket.ts`). game-session 은 같은 포트에 `GET /health`(ALB 헬스체크)와 30s WS ping(ALB idle timeout·유령 연결 정리)을 가진다. web 헬스체크는 `/api/health`.
 - 비밀값(Postgres 비밀번호, `DATABASE_URL`, `JWT_SECRET`)은 Terraform 이 생성해 SSM Parameter Store 에 두고 태스크 정의가 ARN 으로 참조한다.
 - 브랜치: 기본 브랜치는 **`dev`**(작업 브랜치). `main` 은 배포 브랜치라 직접 push 를 막고 **dev → main PR 머지로만** 반영한다(GitHub ruleset `protect-main`: PR 필수·force push/삭제 금지). main 에 머지되는 순간이 배포 시점. EC2 가 정지 중이면 apply 는 성공하되 새 태스크는 EC2 를 켤 때까지 대기한다(circuit breaker 가 롤백했으면 `deploy.sh apply` 로 다시 밀기).
-- 배포: **main 에 push 되면 GitHub Actions**(`.github/workflows/deploy.yml`)가 바뀐 앱만 arm64 이미지로 빌드(QEMU)·ECR push(태그 = 커밋 sha)하고, `image_tags` map(바뀐 앱 = 새 sha, 나머지 = 지금 배포된 태그)으로 `terraform apply` → 바뀐 서비스만 재시작(인스턴스 1대라 몇 초 끊김). `packages/shared`·`Dockerfile`·lockfile 이 바뀌면 전부. AWS 권한은 OIDC 롤 `gachamind-github-deploy`(main 브랜치만). 수동 배포는 `infra/deploy.sh [all|build|push|apply] [service ...]`.
+- 배포: **main 에 push 되면 GitHub Actions**(`.github/workflows/deploy.yml`)가 바뀐 앱만 arm64 이미지로 빌드(QEMU)·ECR push(태그 = 커밋 sha)하고, `image_tags` map(바뀐 앱 = 새 sha, 나머지 = 지금 배포된 태그)으로 `terraform apply` → 바뀐 서비스만 재배포(무상태 서비스는 무중단, 샤드는 몇 초 끊김). `packages/shared`·`Dockerfile`·lockfile 이 바뀌면 전부. AWS 권한은 OIDC 롤 `gachamind-github-deploy`(main 브랜치만). 수동 배포는 `infra/deploy.sh [all|build|push|apply] [service ...]`.
 - 접속/로그: SSH 없음. `aws ssm start-session --target <instance_id>`, 로그는 CloudWatch `/gachamind/<service>`.
-- 다음 단계(미정): EC2 2대 이상 시 내부통신(Service Connect)·game-session 라우팅·관리형 DB 분리, 배포 자동화(GitHub Actions, 바뀐 서비스만).
+- 다음 단계: game-session 샤드 식별자를 포트 → 이름으로(인스턴스 2대면 포트가 샤드를 유일하게 가리키지 못한다), 상태 있는 것(Postgres/Redis/RabbitMQ)은 core 인스턴스에 고정하고 무상태 앱은 ASG 인스턴스로 확장. 관리형 DB 분리는 그 뒤.
 
 ## 현재 상태
 - matchmaking: Redis 매칭·least-conn 배정·방 목록 구현됨.
