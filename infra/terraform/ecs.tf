@@ -11,6 +11,9 @@
 #
 # 배포: 무상태 서비스는 새 태스크가 헬스체크를 통과한 뒤 옛 태스크를 내리는 롤링(min 100 / max 200).
 # game-session 은 샤드 하나가 방을 메모리에 들고 있어 같은 샤드 둘이 공존하면 안 되므로 "내리고 올리기"(min 0 / max 100).
+#
+# 배치: 상태 있는 것(redis/postgres/rabbitmq)은 core 인스턴스에 고정(core = true), 나머지는 role=app 인스턴스에만 뜬다.
+# app 인스턴스가 여러 대면 같은 서비스의 태스크를 인스턴스에 고르게 퍼뜨린다(spread).
 
 resource "aws_ecs_cluster" "main" {
   name = "gachamind"
@@ -52,6 +55,7 @@ locals {
   #   protocol  connect=true 일 때 L7 프로토콜("http"). 없으면 TCP 로 흘려보낸다(redis/amqp/postgres).
   #   lb        ALB 타깃그룹 ARN(있으면 ECS 가 타깃을 등록한다)
   #   rolling   true 면 옛/새 태스크 공존 롤링, false 면 내리고 올리기
+  #   core      true 면 core 인스턴스에 고정(상태 있는 것), false 면 app 인스턴스(ASG)에만
   services = merge(
     {
       redis = {
@@ -59,6 +63,7 @@ locals {
         port    = 6379
         memory  = 64
         connect = true
+        core    = true
       }
       postgres = {
         image   = "postgres:16-alpine"
@@ -69,6 +74,7 @@ locals {
         # 컨테이너를 갈아도 데이터가 남도록 EC2 디스크에 둔다(EC2 를 갈면 사라진다).
         volumes = [{ name = "pgdata", host_path = "/data/postgres", container_path = "/var/lib/postgresql/data" }]
         connect = true
+        core    = true
         # 데이터 디렉토리를 두 프로세스가 동시에 열면 안 된다.
         rolling = false
       }
@@ -77,6 +83,7 @@ locals {
         port    = 5672
         memory  = 384
         connect = true
+        core    = true
       }
       web = {
         image  = local.ecr["web"]
@@ -144,6 +151,7 @@ locals {
     protocol = null
     lb       = null
     rolling  = true
+    core     = false
   }
   svc = { for k, v in local.services : k => merge(local.service_defaults, v) }
 }
@@ -219,6 +227,22 @@ resource "aws_ecs_service" "svc" {
   deployment_circuit_breaker {
     enable   = true
     rollback = true
+  }
+
+  # 어느 인스턴스에 뜰지. core 는 인스턴스 ID 로 못 박고(속성을 달려면 user_data 를 바꿔야 해서 인스턴스가 교체된다),
+  # app 은 launch template 의 user_data 가 단 role 속성으로 고른다.
+  placement_constraints {
+    type       = "memberOf"
+    expression = each.value.core ? "ec2InstanceId == ${aws_instance.ecs_host.id}" : "attribute:role == app"
+  }
+
+  # app 인스턴스가 여러 대면 같은 서비스의 태스크를 인스턴스에 고르게 퍼뜨린다(web desired 2 → 한 대에 하나씩).
+  dynamic "ordered_placement_strategy" {
+    for_each = each.value.core ? [] : [1]
+    content {
+      type  = "spread"
+      field = "instanceId"
+    }
   }
 
   # ALB 뒤에 서는 서비스. ECS 가 태스크의 (인스턴스, 동적 포트)를 타깃그룹에 넣고 뺀다.

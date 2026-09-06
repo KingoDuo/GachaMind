@@ -10,9 +10,21 @@ variable "domain" {
 }
 
 variable "instance_type" {
-  description = "ECS 컨테이너 인스턴스. 이미지가 arm64(Apple Silicon 빌드)라 Graviton(t4g) 계열이어야 한다."
+  description = "core 인스턴스(redis/postgres/rabbitmq 고정). 이미지가 arm64 라 Graviton(t4g) 계열이어야 한다."
+  type        = string
+  default     = "t4g.small"
+}
+
+variable "app_instance_type" {
+  description = "app 인스턴스(무상태 앱 + game-session 샤드). ASG 로 늘린다. arm64 → t4g 계열."
   type        = string
   default     = "t4g.medium"
+}
+
+variable "app_instance_max" {
+  description = "app ASG 최대 인스턴스 수. desired 는 Terraform 이 아니라 infra/env.sh(aws autoscaling) 로 조정한다."
+  type        = number
+  default     = 2
 }
 
 variable "image_tags" {
