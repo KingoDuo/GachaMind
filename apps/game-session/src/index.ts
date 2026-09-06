@@ -9,7 +9,7 @@ import {
 } from "@gachamind/shared";
 import { RoomManager, type Room } from "./room.js";
 import { handleGuess, handlePlayerLeftDuringGame, startGame } from "./game.js";
-import { PORT } from "./config.js";
+import { PORT, SHARD_ID } from "./config.js";
 import {
   clearSessionLoad,
   isRoomAssignedHere,
@@ -36,14 +36,14 @@ const roomManager = new RoomManager();
 const server = createServer((req, res) => {
   if (req.url === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", service: "game-session", port: PORT }));
+    res.end(JSON.stringify({ status: "ok", service: "game-session", shard: SHARD_ID }));
     return;
   }
   res.writeHead(404);
   res.end();
 });
 const wss = new WebSocketServer({ server });
-server.listen(PORT, () => console.log(`[game-session] pid=${process.pid} listening on ${PORT}`));
+server.listen(PORT, () => console.log(`[game-session] shard=${SHARD_ID} pid=${process.pid} listening on ${PORT}`));
 
 interface ConnectionState {
   joinedRoomId: string | null;

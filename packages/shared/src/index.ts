@@ -5,7 +5,12 @@
 
 export interface RoomAssignment {
   roomId: string;
-  port: number;
+  /**
+   * 방이 열려 있는 game-session 샤드의 이름. 브라우저는 이 값으로 접속 주소를 만든다
+   * (프로덕션은 ALB 경로 /gs/{shard}, 로컬은 샤드 이름이 곧 포트라 ws://host:{shard}).
+   * 포트가 아니라 이름인 이유: 인스턴스가 여러 대면 같은 포트가 여러 샤드에 있어 포트로는 샤드를 못 가린다.
+   */
+  shard: string;
 }
 
 /** 새 방을 만들지(create), 진행 중인 방에 난입할지(match) */
@@ -312,17 +317,17 @@ export function isRoomCode(code: string): boolean {
 }
 
 // Redis 키 규칙 (matchmaking - game-session 공유 상태)
-//   room:{roomId}   Hash: { port, capacity, playerCount }
-//   rooms:joinable  Set:  정원이 남은 roomId들
-//   session:{port}  Hash: { port, rooms, connections }  replica별 부하
+//   room:{roomId}    Hash: { shard, capacity, playerCount, phase }
+//   rooms:joinable   Set:  정원이 남은 roomId들
+//   session:{shard}  Hash: { shard, rooms, connections }  샤드별 부하
 
 /**
  * Redis에 기록되는 방 사본. 진짜 상태는 game-session 인메모리이고 이건 matchmaking이 읽는 projection이다.
  * game-session이 갱신하고, matchmaking은 배정 후보를 고를 때만 읽는다.
  */
 export interface RoomProjection {
-  /** 이 방이 열려 있는 game-session 포트. */
-  port: number;
+  /** 이 방이 열려 있는 game-session 샤드 이름. */
+  shard: string;
   capacity: number;
   playerCount: number;
   /** 로비 목록에서 "대기 중/게임 중"을 구분하려고 같이 싣는다. */
@@ -350,17 +355,17 @@ export const PROJECTION_TTL_SECONDS = 60;
 export const PROJECTION_HEARTBEAT_INTERVAL_MS = 20_000;
 
 /**
- * game-session replica가 자기 부하를 알리는 키.
- * matchmaking이 새 방을 어느 replica에 둘지(least-connections) 고를 때 읽는다.
- * 키가 없으면 그 replica는 죽은 것으로 본다.
+ * game-session 샤드가 자기 부하를 알리는 키.
+ * matchmaking이 새 방을 어느 샤드에 둘지(least-connections) 고를 때 읽는다.
+ * 키가 없으면 그 샤드는 죽은 것으로 본다.
  */
-export function sessionLoadKey(port: number): string {
-  return `session:${port}`;
+export function sessionLoadKey(shard: string): string {
+  return `session:${shard}`;
 }
 
-/** replica 하나의 현재 부하. 값의 주인은 game-session 인메모리이고 Redis는 그 사본이다. */
+/** 샤드 하나의 현재 부하. 값의 주인은 game-session 인메모리이고 Redis는 그 사본이다. */
 export interface SessionLoad {
-  port: number;
+  shard: string;
   rooms: number;
   connections: number;
 }

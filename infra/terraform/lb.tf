@@ -2,7 +2,7 @@
 #   :80  → 443 으로 리다이렉트
 #   :443 (ACM 인증서)
 #        기본           → web 타깃그룹
-#        /gs/{port}/*   → game-session 샤드 타깃그룹   ← 브라우저는 wss://도메인/gs/4001 로 붙는다
+#        /gs/{shard}/*  → game-session 샤드 타깃그룹   ← 브라우저는 wss://도메인/gs/1 로 붙는다
 # 타깃그룹의 내용물(어느 인스턴스의 어느 포트)은 Terraform 이 아니라 ECS 가 채운다(ecs.tf 의 load_balancer 블록).
 # 태스크가 뜨면 등록되고 내려가면 빠지므로, 여기선 그릇(타깃그룹)과 라우팅 규칙만 정의한다.
 
@@ -64,12 +64,12 @@ resource "aws_lb_target_group" "web" {
   }
 }
 
-# ── 타깃그룹: game-session 샤드(포트마다 하나) ──
+# ── 타깃그룹: game-session 샤드(이름마다 하나) ──
 resource "aws_lb_target_group" "game_session" {
-  for_each    = toset([for p in var.game_session_ports : tostring(p)])
+  for_each    = toset(var.game_session_shards)
   name        = "gachamind-gs-${each.key}"
   vpc_id      = aws_vpc.main.id
-  port        = tonumber(each.key) # 형식상 값. 실제 포트는 ECS 가 등록한다.
+  port        = 4001 # 형식상 값. 실제 포트는 ECS 가 등록한다.
   protocol    = "HTTP"
   target_type = "instance"
 
@@ -115,13 +115,13 @@ resource "aws_lb_listener" "https" {
 }
 
 resource "aws_lb_listener_rule" "game_session" {
-  for_each     = aws_lb_target_group.game_session
+  for_each     = toset(var.game_session_shards)
   listener_arn = aws_lb_listener.https.arn
-  priority     = 100 + tonumber(each.key) - 4000 # 4001 → 101, 4002 → 102 …
+  priority     = 101 + index(var.game_session_shards, each.key) # 목록 순서대로 101, 102 …
 
   action {
     type             = "forward"
-    target_group_arn = each.value.arn
+    target_group_arn = aws_lb_target_group.game_session[each.key].arn
   }
 
   condition {

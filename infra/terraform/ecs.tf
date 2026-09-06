@@ -90,9 +90,9 @@ locals {
         port   = 4000
         memory = 128
         env = {
-          PORT               = "4000"
-          REDIS_URL          = local.redis_url
-          GAME_SESSION_PORTS = join(",", var.game_session_ports)
+          PORT                = "4000"
+          REDIS_URL           = local.redis_url
+          GAME_SESSION_SHARDS = join(",", var.game_session_shards)
         }
         connect  = true
         protocol = "http"
@@ -113,22 +113,23 @@ locals {
         secrets = { DATABASE_URL = aws_ssm_parameter.database_url.arn }
       }
     },
-    # game-session 샤드: 포트 하나당 서비스 하나(game-session-4001, game-session-4002 …).
-    # 브라우저가 wss://도메인/gs/{port} 로 붙으면 ALB 가 그 샤드의 타깃그룹으로 보낸다.
+    # game-session 샤드: 이름 하나당 서비스 하나(game-session-1, game-session-2 …). 태스크 정의는 SHARD_ID 만 다르다.
+    # 브라우저가 wss://도메인/gs/{shard} 로 붙으면 ALB 가 그 샤드의 타깃그룹으로 보낸다.
     {
-      for p in var.game_session_ports : "game-session-${p}" => {
+      for shard in var.game_session_shards : "game-session-${shard}" => {
         image  = local.ecr["game-session"]
-        port   = p
+        port   = 4001
         memory = 256
         env = {
-          PORT            = tostring(p)
+          PORT            = "4001"
+          SHARD_ID        = shard
           MATCHMAKING_URL = local.matchmaking
           REDIS_URL       = local.redis_url
           RABBITMQ_URL    = local.rabbitmq_url
         }
         # user 가 서명한 세션 쿠키를 검증한다. 없으면 dev-secret 으로 검증해 로그인한 사람도 게스트로 보인다.
         secrets = { JWT_SECRET = aws_ssm_parameter.jwt_secret.arn }
-        lb      = aws_lb_target_group.game_session[tostring(p)].arn
+        lb      = aws_lb_target_group.game_session[shard].arn
         rolling = false
       }
     },

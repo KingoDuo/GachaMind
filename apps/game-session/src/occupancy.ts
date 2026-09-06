@@ -7,18 +7,18 @@ import {
   type RoomProjection,
   type SessionLoad,
 } from "@gachamind/shared";
-import { PORT } from "./config.js";
+import { SHARD_ID } from "./config.js";
 import { redis } from "./redis.js";
 import type { Room, RoomManager } from "./room.js";
 
 /**
  * 방의 현재 인원을 Redis에 반영한다.
  * matchmaking이 배정 후보를 고를 때 읽는 사본일 뿐이라, 실패해도 게임 진행은 막지 않고 로그만 남긴다.
- * 키가 없으면 port와 capacity까지 같이 써서 스스로 복구한다(배정 기록이 유실돼도 방을 다시 찾을 수 있게).
+ * 키가 없으면 shard와 capacity까지 같이 써서 스스로 복구한다(배정 기록이 유실돼도 방을 다시 찾을 수 있게).
  */
 export async function syncOccupancy(room: Room): Promise<void> {
   const projection: RoomProjection = {
-    port: PORT,
+    shard: SHARD_ID,
     capacity: room.capacity,
     playerCount: room.size,
     phase: room.phase,
@@ -42,12 +42,12 @@ export async function syncOccupancy(room: Room): Promise<void> {
 }
 
 /**
- * 이 replica의 부하를 알린다. matchmaking이 새 방을 어디에 둘지 고르는 근거다.
- * 방이 하나도 없어도 반드시 보고해야 한다. 보고하지 않으면 죽은 replica로 간주돼 아무 방도 배정받지 못한다.
+ * 이 샤드의 부하를 알린다. matchmaking이 새 방을 어디에 둘지 고르는 근거다.
+ * 방이 하나도 없어도 반드시 보고해야 한다. 보고하지 않으면 죽은 샤드로 간주돼 아무 방도 배정받지 못한다.
  */
 export async function publishSessionLoad(roomManager: RoomManager): Promise<void> {
   const load: SessionLoad = {
-    port: PORT,
+    shard: SHARD_ID,
     rooms: roomManager.roomCount,
     connections: roomManager.totalConnections,
   };
@@ -55,8 +55,8 @@ export async function publishSessionLoad(roomManager: RoomManager): Promise<void
   try {
     await redis
       .pipeline()
-      .hset(sessionLoadKey(PORT), load)
-      .expire(sessionLoadKey(PORT), PROJECTION_TTL_SECONDS)
+      .hset(sessionLoadKey(SHARD_ID), load)
+      .expire(sessionLoadKey(SHARD_ID), PROJECTION_TTL_SECONDS)
       .exec();
   } catch (err) {
     console.error(`[occupancy] session load publish failed:`, err);
@@ -66,21 +66,21 @@ export async function publishSessionLoad(roomManager: RoomManager): Promise<void
 /** 정상 종료 시 부하 보고를 지운다. TTL을 기다리지 않고 즉시 배정 대상에서 빠진다. */
 export async function clearSessionLoad(): Promise<void> {
   try {
-    await redis.del(sessionLoadKey(PORT));
+    await redis.del(sessionLoadKey(SHARD_ID));
   } catch (err) {
     console.error(`[occupancy] session load clear failed:`, err);
   }
 }
 
 /**
- * 이 포트에 배정된 방이 맞는지 확인한다.
+ * 이 샤드에 배정된 방이 맞는지 확인한다.
  * 이 검증이 없으면 아무 문자열이나 방 코드로 보내서 유령 방을 만들 수 있고,
- * 다른 포트에 배정된 방 코드로 접속하면 같은 방이 두 프로세스에 갈라져 생긴다.
+ * 다른 샤드에 배정된 방 코드로 접속하면 같은 방이 두 프로세스에 갈라져 생긴다.
  */
 export async function isRoomAssignedHere(roomId: string): Promise<boolean> {
   try {
-    const port = await redis.hget(roomHashKey(roomId), "port");
-    return port !== null && Number(port) === PORT;
+    const shard = await redis.hget(roomHashKey(roomId), "shard");
+    return shard === SHARD_ID;
   } catch (err) {
     // Redis가 흔들릴 때 입장을 막으면 게임 전체가 멈춘다. 유령 방 방지는 부차적이므로 통과시킨다.
     console.error(`[occupancy] assignment check failed for ${roomId}, allowing join:`, err);
@@ -89,7 +89,7 @@ export async function isRoomAssignedHere(roomId: string): Promise<boolean> {
 }
 
 /**
- * 살아있는 방과 이 replica의 부하 보고를 주기적으로 갱신한다.
+ * 살아있는 방과 이 샤드의 부하 보고를 주기적으로 갱신한다.
  * 조용한 방(입퇴장이 없는 방)도 만료되지 않게 하는 것이 목적이다.
  */
 export function startProjectionHeartbeat(roomManager: RoomManager): NodeJS.Timeout {

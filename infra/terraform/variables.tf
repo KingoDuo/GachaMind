@@ -28,8 +28,11 @@ variable "image_tags" {
   }
 }
 
-variable "game_session_ports" {
-  description = "game-session 샤드 포트 목록. 하나당 ECS 서비스가 하나 생긴다."
-  type        = list(number)
-  default     = [4001, 4002]
+variable "game_session_shards" {
+  description = <<-EOT
+    game-session 샤드 이름 목록. 하나당 ECS 서비스(game-session-{이름})·타깃그룹·ALB 경로(/gs/{이름})가 하나씩 생긴다.
+    컨테이너 포트는 전부 4001 로 같고(bridge 라 호스트 포트는 동적) 샤드는 이름으로만 구분한다.
+  EOT
+  type        = list(string)
+  default     = ["1", "2"]
 }
