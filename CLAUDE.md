@@ -141,7 +141,7 @@ Docker 이미지는 루트 `Dockerfile` 하나로 만든다(`--build-arg SERVICE
   - Service Connect 클라이언트 태스크는 **시작 시점**에 네임스페이스에 있던 이름만 /etc/hosts 에 받는다. 서버 서비스(redis 등)가 나중에 처음 등록되면 먼저 뜬 클라이언트는 `ENOTFOUND` — 클라이언트를 `update-service --force-new-deployment` 로 한 번 재시작하면 된다. 이름이 한 번 생긴 뒤에는(태스크가 0개여도) 다시 생기지 않는 문제.
   - core 가 안 붙어 있는 동안 배포가 돌면 circuit breaker 가 core 서비스(redis/rabbitmq)를 **옛 태스크 정의로 롤백**할 수 있다. `update-service --task-definition gachamind-<svc> --force-new-deployment` 로 최신 리비전으로 되돌린다.
   - 운영 DB 스키마가 옛 `synchronize` 시절 것이면 마이그레이션이 `IF NOT EXISTS` 로 건너뛰어 컬럼이 안 맞는다(`column User.username does not exist`). 데이터가 없으면 앱 테이블(`users`, `games`, `game_players`, `user_stats`, `migrations`)을 지우고 user 를 재시작한다.
-  - `env.sh down` 의 인스턴스 정리는 managed draining lifecycle hook 때문에 몇 분 걸린다(`Terminating:Wait`). 기다리다 core 를 먼저 끄면 game-session 종료 핸들러가 Redis 에 못 닿아 SIGKILL 까지 30s 더 걸릴 뿐 문제는 없다.
+  - 전체 종료 때 managed draining 은 동작하지 않는다 — 롤링(min 100%) 서비스는 대체 태스크를 다른 인스턴스에 먼저 놓아야 옛 태스크를 내리는데 놓을 곳이 없어 `Terminating:Wait` 에서 hook 만료(1시간)까지 멈춘다. 그래서 `env.sh down` 은 lifecycle 액션을 바로 CONTINUE 로 완료해 인스턴스를 끈다. draining 이 의미 있는 건 인스턴스가 여럿 남는 스케일인뿐.
 - 접속/로그: SSH 없음. `aws ssm start-session --target <instance_id>`, 로그는 CloudWatch `/gachamind/<service>`(Service Connect 프록시 로그는 같은 그룹의 `service-connect/` 스트림).
 - 다음 단계(미정): 부하 실험으로 game-session 스케일아웃/인 관찰(CPU 대신 샤드당 접속 수 커스텀 지표로 바꾸는 것도 후보), 관리형 데이터 계층(RDS/ElastiCache/Amazon MQ)으로 core 제거. web 은 오토스케일링 안 붙임.
 

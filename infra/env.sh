@@ -7,7 +7,7 @@
 #
 # 사용법: infra/env.sh up [max=4] | down | status
 #   up      core 기동 → app ASG max 복구. 태스크 6개가 놓일 자리가 없으니 ECS 가 인스턴스를 띄운다(2~3분).
-#   down    app ASG max=0 → ASG 가 인스턴스를 끄고, managed draining 이 그 위의 태스크를 정상 종료시킨다 → core 정지.
+#   down    app ASG max=0 → 인스턴스 종료(draining 은 전체 종료에선 옮길 곳이 없어 건너뛴다) → core 정지.
 #   status  인스턴스·ECS 서비스 상태.
 #
 # 정지 중 남는 비용: ALB 공인 IPv4 2개, core EBS 30GB, Route53 존.
@@ -48,11 +48,19 @@ down() {
   # 끄기 전에 태스크를 정상 종료(SIGTERM → 방 정리 콜백)시키므로, core 는 그동안 살아 있어야 한다.
   echo "==> app ASG max=0"
   aws autoscaling update-auto-scaling-group --region "$REGION" --auto-scaling-group-name "$ASG" --min-size 0 --max-size 0
-  # managed draining lifecycle hook 이 태스크를 정리하는 동안 인스턴스는 Terminating:Wait 에 머문다(보통 3~8분).
-  for _ in $(seq 1 90); do
+  # managed draining 은 "다른 인스턴스로 태스크를 옮긴 뒤 끄기"인데, 전체 종료엔 옮길 곳이 없어 대체 태스크가
+  # PROVISIONING 에 멈추고 hook 이 최대 1시간을 기다린다. 전체 종료에선 기다릴 이유가 없으니 lifecycle 액션을
+  # 바로 완료(CONTINUE)해 인스턴스를 끈다. 방은 이미 없고, Redis 사본은 core 와 함께 사라진다.
+  for _ in $(seq 1 60); do
     n=$(asg_instances)
     [ "$n" = "0" ] && break
-    echo "    app 인스턴스 ${n}대 정리 중… (Terminating:Wait = 태스크 draining)"; sleep 10
+    for id in $(aws autoscaling describe-auto-scaling-groups --region "$REGION" --auto-scaling-group-names "$ASG" \
+        --query 'AutoScalingGroups[0].Instances[?LifecycleState==`Terminating:Wait`].InstanceId' --output text); do
+      aws autoscaling complete-lifecycle-action --region "$REGION" --auto-scaling-group-name "$ASG" \
+        --lifecycle-hook-name ecs-managed-draining-termination-hook --instance-id "$id" --lifecycle-action-result CONTINUE >/dev/null \
+        && echo "    $id 종료 진행"
+    done
+    echo "    app 인스턴스 ${n}대 정리 중…"; sleep 10
   done
 
   echo "==> core $core 정지"
