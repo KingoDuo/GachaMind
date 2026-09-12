@@ -44,7 +44,7 @@
   - `web`(3000) — UI/BFF.
   - `game-session`(4001~) — 클라이언트가 **WebSocket으로 직접 접속**. 초당 수백~수천 건 실시간이라 web을 거치지 않는다.
 
-**샤드는 미리 정한 목록이 아니라 "지금 떠 있는 프로세스"다.** game-session 프로세스는 뜰 때 자기 이름(AWS 는 ECS 태스크 id, 로컬은 포트)과 닿을 수 있는 주소(인스턴스 사설 IP + 동적 호스트 포트)를 정해 Redis `session:{shard}`에 등록하고 TTL 로 유지한다(`config.ts` — ECS 컨테이너 메타데이터 파일에서 읽는다). 그래서 샤드가 늘고 줄어도(오토스케일링·크래시) 아무도 목록을 관리하지 않는다: matchmaking 은 `session:*` 를 스캔해 후보를 고르고, gs-gateway 는 접속 경로 `/gs/{shard}` 의 이름을 같은 키로 실제 주소로 바꿔 TCP 로 이어 준다. 로컬(pnpm dev/compose)은 게이트웨이 없이 브라우저가 샤드 포트로 직접 붙는다(샤드 이름 = 포트).
+**샤드는 미리 정한 목록이 아니라 "지금 떠 있는 프로세스"다.** game-session 프로세스는 뜰 때 자기 이름(AWS 는 ECS 태스크 id, 로컬은 포트)과 닿을 수 있는 주소(인스턴스 사설 IP + 동적 호스트 포트)를 정해 Redis `session:{shard}`에 등록하고 TTL 로 유지한다(`config.ts` — 태스크 id·호스트 포트는 태스크 메타데이터 엔드포인트 v4, 인스턴스 IP 는 컨테이너 메타데이터 파일. Service Connect 가 붙은 bridge 태스크는 포트 매핑이 pause 컨테이너에 걸려 파일의 PortMappings 가 비어 있다). 그래서 샤드가 늘고 줄어도(오토스케일링·크래시) 아무도 목록을 관리하지 않는다: matchmaking 은 `session:*` 를 스캔해 후보를 고르고, gs-gateway 는 접속 경로 `/gs/{shard}` 의 이름을 같은 키로 실제 주소로 바꿔 TCP 로 이어 준다. 로컬(pnpm dev/compose)은 게이트웨이 없이 브라우저가 샤드 포트로 직접 붙는다(샤드 이름 = 포트).
 - **내부(web/서비스만 호출):**
   - `matchmaking`·`user`·`results-worker` — 브라우저는 직접 안 부른다.
 
