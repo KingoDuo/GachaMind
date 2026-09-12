@@ -48,10 +48,11 @@ down() {
   # 끄기 전에 태스크를 정상 종료(SIGTERM → 방 정리 콜백)시키므로, core 는 그동안 살아 있어야 한다.
   echo "==> app ASG max=0"
   aws autoscaling update-auto-scaling-group --region "$REGION" --auto-scaling-group-name "$ASG" --min-size 0 --max-size 0
-  for _ in $(seq 1 36); do
+  # managed draining lifecycle hook 이 태스크를 정리하는 동안 인스턴스는 Terminating:Wait 에 머문다(보통 3~8분).
+  for _ in $(seq 1 90); do
     n=$(asg_instances)
     [ "$n" = "0" ] && break
-    echo "    app 인스턴스 ${n}대 정리 중…"; sleep 10
+    echo "    app 인스턴스 ${n}대 정리 중… (Terminating:Wait = 태스크 draining)"; sleep 10
   done
 
   echo "==> core $core 정지"
