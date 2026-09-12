@@ -35,6 +35,10 @@ build() {
 }
 
 push() {
+  # 저장소가 먼저 있어야 push 가 된다. 새 앱의 첫 배포를 위해 저장소만 targeted apply 한다.
+  terraform -chdir="$TF_DIR" apply -input=false -auto-approve \
+    -target=aws_ecr_repository.app -target=aws_ecr_lifecycle_policy.app \
+    -var 'image_tags={"web"="x","matchmaking"="x","game-session"="x","gs-gateway"="x","user"="x","results-worker"="x"}' >/dev/null
   aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
   for svc in "${SERVICES[@]}"; do
     echo "==> push $svc:$TAG"
