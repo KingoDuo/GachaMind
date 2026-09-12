@@ -1,6 +1,6 @@
 # main 에 push 되면 바뀐 서비스만 빌드·push 하고 terraform apply 로 ECS 에 반영한다.
 #
-#   detect  어떤 앱이 바뀌었나 (apps/<svc>/** → 그 앱, shared/Dockerfile/lockfile → 전부)
+#   detect  어떤 앱이 바뀌었나 (apps/<svc>/** → 그 앱, shared/Dockerfile/lockfile → 전부, ECS 에 없는 서비스 → 반드시)
 #   build   바뀐 앱만 arm64 이미지 빌드 → ECR push (태그 = 커밋 sha)
 #   deploy  image_tags = { 바뀐 앱: 새 sha, 나머지: 지금 ECS 에 있는 태그 } 로 terraform apply
 #
@@ -42,35 +42,41 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: dorny/paths-filter@v3
-        id: changes
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
-          # push 면 직전 커밋과, 수동 실행이면 main 끝과 비교한다(수동은 inputs.all 로 강제).
-          filters: |
-            all:
-              - packages/shared/**
-              - Dockerfile
-              - .dockerignore
-              - pnpm-lock.yaml
-              - pnpm-workspace.yaml
-              - package.json
-            web: [apps/web/**]
-            matchmaking: [apps/matchmaking/**]
-            game-session: [apps/game-session/**]
-            user: [apps/user/**]
-            results-worker: [apps/results-worker/**]
+          role-to-assume: ${{ env.AWS_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
       - id: pick
         shell: bash
         run: |
-          all='["web","matchmaking","game-session","user","results-worker"]'
-          if [ "${{ inputs.all }}" = "true" ] || [ "${{ steps.changes.outputs.all }}" = "true" ]; then
-            echo "services=$all" >> "$GITHUB_OUTPUT"; exit 0
+          all=(web matchmaking game-session gs-gateway user results-worker)
+          before='${{ github.event.before }}'
+
+          # 무엇이 바뀌었나. push 면 직전 main 과 diff (PR 머지 커밋도 정상 감지), 수동 실행은 inputs.all 로만.
+          # dorny/paths-filter 는 머지 커밋에서 "0개 변경"을 돌려줘 빌드가 건너뛰어지는 문제가 있어 직접 diff 한다.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            changed=$([ "${{ inputs.all }}" = "true" ] && echo all || echo "")
+          elif [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$before" 2>/dev/null; then
+            changed=all
+          else
+            files=$(git diff --name-only "$before" "${{ github.sha }}")
+            if echo "$files" | grep -qE '^(packages/shared/|Dockerfile$|\.dockerignore$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|package\.json$)'; then
+              changed=all
+            else
+              changed=$(echo "$files" | grep -oE '^apps/[^/]+/' | sed 's|apps/||; s|/||' | sort -u | tr '\n' ' ')
+            fi
           fi
+
+          # ECS 에 아직 없는 서비스(처음 추가됐거나 이름이 바뀐 앱)는 "지금 배포된 태그"를 읽을 수 없으니 반드시 빌드한다.
+          existing=$(aws ecs list-services --cluster gachamind --query 'serviceArns[]' --output text | tr '\t' '\n' | sed 's|.*/||')
+
           list=()
-          for s in web matchmaking game-session user results-worker; do
-            v=$(echo '${{ toJSON(steps.changes.outputs) }}' | jq -r --arg s "$s" '.[$s]')
-            [ "$v" = "true" ] && list+=("\"$s\"")
+          for s in "${all[@]}"; do
+            if [ "$changed" = "all" ] || echo " $changed " | grep -q " $s " || ! echo "$existing" | grep -qx "$s"; then
+              list+=("\"$s\"")
+            fi
           done
+          echo "changed=$changed"
           echo "services=[$(IFS=,; echo "${list[*]}")]" >> "$GITHUB_OUTPUT"
       - run: echo "build targets → ${{ steps.pick.outputs.services }}"
 
@@ -123,14 +129,12 @@ jobs:
         run: |
           changed='${{ needs.detect.outputs.services }}'
           pairs=()
-          for s in web matchmaking game-session user results-worker; do
+          for s in web matchmaking game-session gs-gateway user results-worker; do
             if echo "$changed" | jq -e --arg s "$s" 'index($s)' >/dev/null; then
               tag="${{ github.sha }}"
             else
               # "지금 서비스가 실제로 쓰는" 태스크 정의에서 읽는다. 최신 리비전이 아니라 — 롤백됐을 수 있으니.
-              # game-session 은 샤드 서비스(game-session-1, game-session-2 …) 중 첫 번째를 대표로 본다.
-              svc="$s"; [ "$s" = "game-session" ] && svc="game-session-1"
-              td=$(aws ecs describe-services --cluster gachamind --services "$svc" --query 'services[0].taskDefinition' --output text 2>/dev/null || true)
+              td=$(aws ecs describe-services --cluster gachamind --services "$s" --query 'services[0].taskDefinition' --output text 2>/dev/null || true)
               tag=$([ -n "$td" ] && [ "$td" != "None" ] && aws ecs describe-task-definition --task-definition "$td" \
                     --query 'taskDefinition.containerDefinitions[0].image' --output text 2>/dev/null | sed 's/.*://' || true)
               tag="${tag:-${{ github.sha }}}"

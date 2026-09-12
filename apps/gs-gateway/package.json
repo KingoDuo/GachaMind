@@ -1,0 +1,19 @@
+{
+  "name": "gs-gateway",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@gachamind/shared": "workspace:*",
+    "ioredis": "^5.11.1",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}

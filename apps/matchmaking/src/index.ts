@@ -3,28 +3,27 @@ import {
   DEFAULT_ROOM_CAPACITY,
   JOINABLE_ROOMS_SET_KEY,
   PROJECTION_TTL_SECONDS,
+  SESSION_LOAD_KEY_PATTERN,
   generateRoomCode,
   normalizeRoomCode,
   roomHashKey,
-  sessionLoadKey,
   type AssignMode,
   type GamePhase,
   type RoomAssignment,
   type RoomListResponse,
   type RoomSummary,
+  type SessionLoad,
 } from "@gachamind/shared";
 import { redis } from "./redis.js";
 
 const PORT = Number(process.env.PORT ?? 4000);
 
 /**
- * 배정 대상 샤드 이름 목록. 실제 후보는 이 중 부하를 보고하고 있는 샤드뿐이다.
- * 로컬은 샤드 이름이 곧 포트("4001,4002"), AWS 는 ECS 서비스 이름 뒤 번호("1,2")다.
+ * 샤드 하나에 몰아 넣는 접속 수 상한(soft). 이 아래에서는 가장 찬 샤드에 새 방을 준다.
+ * 웹 서버와 반대로 "고르게"가 아니라 "몰아서" 채우는 이유: 빈 샤드가 생겨야 오토스케일링이 줄일 수 있다.
+ * 방 하나가 최대 100명이라 200 이면 샤드당 큰 방 두 개 정도. 정원 판정은 어차피 game-session 이 한다.
  */
-const GAME_SESSION_SHARDS = (process.env.GAME_SESSION_SHARDS ?? "4001")
-  .split(",")
-  .map((s) => s.trim())
-  .filter((shard) => shard.length > 0);
+const SHARD_CONNECTION_LIMIT = Number(process.env.SHARD_CONNECTION_LIMIT ?? 200);
 
 /** 난입 후보를 한 번에 뽑아보는 개수. 죽은 방을 만나도 왕복 없이 다음 후보로 넘어가려고 여러 개 뽑는다. */
 const JOINABLE_SAMPLE_SIZE = 10;
@@ -40,29 +39,56 @@ const app = Fastify({ logger: false });
 app.get("/health", async () => ({ status: "ok", service: "matchmaking" }));
 
 /**
- * 살아있는 샤드 중 접속 수가 가장 적은 것을 고른다.
- * 부하를 보고하지 않는 샤드는 죽은 것으로 보고 후보에서 뺀다.
+ * 지금 살아있는 샤드 목록. 고정된 목록이 없다 — session:* 키를 남기고 있는 프로세스가 곧 샤드다.
+ * 샤드가 늘거나 줄면(오토스케일링, 크래시) 키가 생기고 TTL 로 사라지므로 여기서 자연히 반영된다.
+ * 샤드는 많아야 수십 개라 SCAN 한 바퀴가 부담이 없다.
  */
-async function pickLeastLoadedShard(): Promise<string | null> {
+async function listSessionLoads(): Promise<SessionLoad[]> {
+  const keys: string[] = [];
+  let cursor = "0";
+  do {
+    const [next, batch] = await redis.scan(cursor, "MATCH", SESSION_LOAD_KEY_PATTERN, "COUNT", 100);
+    cursor = next;
+    keys.push(...batch);
+  } while (cursor !== "0");
+  if (keys.length === 0) return [];
+
   const pipeline = redis.pipeline();
-  for (const shard of GAME_SESSION_SHARDS) pipeline.hget(sessionLoadKey(shard), "connections");
+  for (const key of keys) pipeline.hgetall(key);
   const results = await pipeline.exec();
 
-  let bestShard: string | null = null;
-  let bestConnections = Number.POSITIVE_INFINITY;
-
-  for (let i = 0; i < GAME_SESSION_SHARDS.length; i += 1) {
-    const reported = results?.[i]?.[1] as string | null | undefined;
-    if (reported === null || reported === undefined) continue;
-
-    const connections = Number(reported);
-    if (connections < bestConnections) {
-      bestConnections = connections;
-      bestShard = GAME_SESSION_SHARDS[i];
-    }
+  const loads: SessionLoad[] = [];
+  for (let i = 0; i < keys.length; i += 1) {
+    const hash = results?.[i]?.[1] as Record<string, string> | undefined;
+    // SCAN 과 읽기 사이에 만료됐거나, 옛 형식(주소 없음)이면 후보에서 뺀다.
+    if (!hash?.shard || !hash.host || !hash.port) continue;
+    loads.push({
+      shard: hash.shard,
+      host: hash.host,
+      port: Number(hash.port),
+      rooms: Number(hash.rooms),
+      connections: Number(hash.connections),
+    });
   }
+  return loads;
+}
 
-  return bestShard;
+/**
+ * 새 방을 둘 샤드를 고른다(binpack). 상한 아래에서 가장 찬 샤드 → 없으면 가장 빈 샤드.
+ * 몰아 넣어야 빈 샤드가 생기고, 빈 샤드(보호 안 걸린 태스크)가 있어야 오토스케일링이 줄일 수 있다.
+ */
+async function pickShardForNewRoom(): Promise<string | null> {
+  const loads = await listSessionLoads();
+  if (loads.length === 0) return null;
+
+  const underLimit = loads.filter((l) => l.connections < SHARD_CONNECTION_LIMIT);
+  if (underLimit.length > 0) {
+    underLimit.sort((a, b) => b.connections - a.connections || a.shard.localeCompare(b.shard));
+    return underLimit[0].shard;
+  }
+  // 전부 상한을 넘었으면 그나마 덜 찬 곳. 스케일아웃이 따라오면 다음 방부터 새 샤드로 간다.
+  loads.sort((a, b) => a.connections - b.connections || a.shard.localeCompare(b.shard));
+  return loads[0].shard;
 }
 
 /**
@@ -163,7 +189,7 @@ app.post<{ Body: { mode?: AssignMode } }>("/assign", async (req, reply) => {
     }
   }
 
-  const shard = await pickLeastLoadedShard();
+  const shard = await pickShardForNewRoom();
   if (shard === null) {
     return reply.code(503).send({ error: "no game session available" });
   }
@@ -221,4 +247,4 @@ app.delete<{ Params: { roomId: string } }>("/rooms/:roomId", async (req, reply) 
 });
 
 await app.listen({ port: PORT, host: "0.0.0.0" });
-console.log(`[matchmaking] listening on ${PORT}, shards: ${GAME_SESSION_SHARDS.join(",")}`);
+console.log(`[matchmaking] listening on ${PORT}`);
