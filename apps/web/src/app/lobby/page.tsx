@@ -116,9 +116,17 @@ export default function LobbyPage() {
             </p>
           </div>
           {session.user ? (
-            <button onClick={handleLogout} className="xp-button ml-auto shrink-0">
-              로그아웃
-            </button>
+            <div className="ml-auto flex shrink-0 gap-2">
+              <button
+                onClick={() => router.push(`/profile/${encodeURIComponent(session.user!.username)}`)}
+                className="xp-button"
+              >
+                내 프로필
+              </button>
+              <button onClick={handleLogout} className="xp-button">
+                로그아웃
+              </button>
+            </div>
           ) : (
             <button onClick={() => router.push("/")} className="xp-button ml-auto shrink-0">
               닉네임 변경

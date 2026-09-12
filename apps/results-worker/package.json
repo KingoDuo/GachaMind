@@ -10,13 +10,11 @@
   "dependencies": {
     "@gachamind/shared": "workspace:*",
     "amqplib": "^0.10.5",
-    "pg": "^8.13.1",
     "tsx": "^4.19.2"
   },
   "devDependencies": {
     "@types/amqplib": "^0.10.5",
     "@types/node": "^22.10.0",
-    "typescript": "^5.7.2",
-    "@types/pg": "^8.11.10"
+    "typescript": "^5.7.2"
   }
 }

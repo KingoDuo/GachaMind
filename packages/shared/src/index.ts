@@ -407,3 +407,58 @@ export interface GameFinishedEvent {
 }
 
 export type GameEvent = GameFinishedEvent;
+
+// 전적 / 프로필 (web - user)
+//
+// 계정(users)과 전적(games / game_players / user_stats)은 모두 user 서비스 소유다(user DB 의 주인 = user 서버).
+// results-worker 는 game.events 를 받아 user 의 내부 API(POST /internal/games, 본문은 GameFinishedEvent)로
+// 넘기기만 하고 DB 를 만지지 않는다. 아래 타입은 apps/user/src/history 에 같은 모양이 한 벌 더 있다(빌드 제약).
+
+/** 다른 사람에게도 보이는 계정 정보. */
+export interface PublicUser {
+  id: string;
+  username: string;
+  nickname: string;
+  /** ISO8601 */
+  createdAt: string;
+}
+
+/**
+ * 회원 한 명의 누적 전적. user 서비스가 게임을 저장할 때마다 같은 트랜잭션에서 갱신하는 집계표(user_stats)다.
+ * 한 판도 안 했으면 전부 0 이고 lastPlayedAt 은 null.
+ */
+export interface PlayerStats {
+  gamesPlayed: number;
+  /** 1등 횟수. 동점 1등도 센다. */
+  wins: number;
+  totalScore: number;
+  bestScore: number;
+  /** ISO8601. 한 판도 없으면 null. */
+  lastPlayedAt: string | null;
+}
+
+/** 회원이 참가한 게임 한 판. 전적 목록의 한 줄. */
+export interface PlayerGameRecord {
+  gameId: string;
+  roomId: string;
+  /** ISO8601 */
+  finishedAt: string;
+  roundsPlayed: number;
+  /** 종료 시점에 방에 있던 인원(= 기록된 플레이어 수). */
+  playerCount: number;
+  score: number;
+  rank: number;
+}
+
+/** 최근 게임 목록 한 페이지. 최신순이고, nextCursor 를 되돌려주면 그 다음(더 오래된) 페이지를 준다. */
+export interface PlayerGamesResponse {
+  games: PlayerGameRecord[];
+  /** 더 없으면 null. 내용은 불투명한 문자열이라 클라이언트가 해석하지 않는다. */
+  nextCursor: string | null;
+}
+
+/** user 의 GET /users/{username}/profile, web 의 GET /api/profiles/{username} 응답. */
+export interface ProfileResponse {
+  user: PublicUser;
+  stats: PlayerStats;
+}
