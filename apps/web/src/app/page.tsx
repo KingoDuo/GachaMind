@@ -113,6 +113,12 @@ export default function Home() {
               >
                 계속하기
               </button>
+              <button
+                onClick={() => router.push(`/profile/${encodeURIComponent(session.user!.username)}`)}
+                className="xp-button"
+              >
+                프로필
+              </button>
               <button onClick={handleLogout} className="xp-button">
                 로그아웃
               </button>

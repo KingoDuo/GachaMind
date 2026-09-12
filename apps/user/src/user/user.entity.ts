@@ -1,7 +1,7 @@
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn } from "typeorm";
 
-// user 서비스가 소유하는 유일한 영속 테이블(계정).
-// TODO: 프로필/전적 관련 컬럼은 이후 슬라이스에서 확장.
+// 계정 테이블. user DB 의 주인은 이 서비스라 스키마는 src/migrations 로만 바꾼다.
+// 전적은 같은 서비스의 history 모듈(games / game_players / user_stats)에 있다.
 @Entity("users")
 export class User {
   @PrimaryGeneratedColumn("uuid")

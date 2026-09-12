@@ -58,12 +58,13 @@ services:
     depends_on: [postgres]
 
   results-worker:
+    # game.events 소비자. 결과를 user 의 내부 API 로 넘긴다(DB 는 만지지 않는다).
     build: { context: .., args: { SERVICE: results-worker } }
     image: gachamind/results-worker:local
     environment:
       RABBITMQ_URL: amqp://rabbitmq:5672
-      DATABASE_URL: postgresql://gachamind:gachamind@postgres:5432/gachamind
-    depends_on: [rabbitmq, postgres]
+      USER_URL: http://user:4010
+    depends_on: [rabbitmq, user]
 
   # ── 인프라 (공식 이미지) ──
   redis:

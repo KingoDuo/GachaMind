@@ -144,11 +144,11 @@ locals {
         connect  = true
         protocol = "http"
       }
+      # game.events 소비자. 결과를 user 의 내부 API 로 넘긴다. DB 접속 정보가 없다 — 전적 테이블의 주인은 user 다.
       results-worker = {
-        image   = local.ecr["results-worker"]
-        memory  = 128
-        env     = { RABBITMQ_URL = local.rabbitmq_url }
-        secrets = { DATABASE_URL = aws_ssm_parameter.database_url.arn }
+        image  = local.ecr["results-worker"]
+        memory = 128
+        env    = { RABBITMQ_URL = local.rabbitmq_url, USER_URL = local.user }
       }
     },
     # game-session 샤드: 이름 하나당 서비스 하나(game-session-1, game-session-2 …). 태스크 정의는 SHARD_ID 만 다르다.
