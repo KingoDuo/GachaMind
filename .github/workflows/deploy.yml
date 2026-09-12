@@ -64,7 +64,8 @@ jobs:
             if echo "$files" | grep -qE '^(packages/shared/|Dockerfile$|\.dockerignore$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|package\.json$)'; then
               changed=all
             else
-              changed=$(echo "$files" | grep -oE '^apps/[^/]+/' | sed 's|apps/||; s|/||' | sort -u | tr '\n' ' ')
+              # grep 은 매치가 없으면 1 을 돌려주는데 set -e 아래에선 그게 곧 실패다. 바뀐 앱이 없는 것도 정상이다.
+              changed=$( (echo "$files" | grep -oE '^apps/[^/]+/' || true) | sed 's|apps/||; s|/||' | sort -u | tr '\n' ' ')
             fi
           fi
 
