@@ -18,6 +18,13 @@ import { redis } from "./redis.js";
 
 const PORT = Number(process.env.PORT ?? 4000);
 
+/**
+ * 샤드 하나에 몰아 넣는 접속 수 상한(soft). 이 아래에서는 가장 찬 샤드에 새 방을 준다.
+ * 웹 서버와 반대로 "고르게"가 아니라 "몰아서" 채우는 이유: 빈 샤드가 생겨야 오토스케일링이 줄일 수 있다.
+ * 방 하나가 최대 100명이라 200 이면 샤드당 큰 방 두 개 정도. 정원 판정은 어차피 game-session 이 한다.
+ */
+const SHARD_CONNECTION_LIMIT = Number(process.env.SHARD_CONNECTION_LIMIT ?? 200);
+
 /** 난입 후보를 한 번에 뽑아보는 개수. 죽은 방을 만나도 왕복 없이 다음 후보로 넘어가려고 여러 개 뽑는다. */
 const JOINABLE_SAMPLE_SIZE = 10;
 
@@ -66,10 +73,20 @@ async function listSessionLoads(): Promise<SessionLoad[]> {
   return loads;
 }
 
-/** 살아있는 샤드 중 접속 수가 가장 적은 것을 고른다. */
-async function pickLeastLoadedShard(): Promise<string | null> {
+/**
+ * 새 방을 둘 샤드를 고른다(binpack). 상한 아래에서 가장 찬 샤드 → 없으면 가장 빈 샤드.
+ * 몰아 넣어야 빈 샤드가 생기고, 빈 샤드(보호 안 걸린 태스크)가 있어야 오토스케일링이 줄일 수 있다.
+ */
+async function pickShardForNewRoom(): Promise<string | null> {
   const loads = await listSessionLoads();
   if (loads.length === 0) return null;
+
+  const underLimit = loads.filter((l) => l.connections < SHARD_CONNECTION_LIMIT);
+  if (underLimit.length > 0) {
+    underLimit.sort((a, b) => b.connections - a.connections || a.shard.localeCompare(b.shard));
+    return underLimit[0].shard;
+  }
+  // 전부 상한을 넘었으면 그나마 덜 찬 곳. 스케일아웃이 따라오면 다음 방부터 새 샤드로 간다.
   loads.sort((a, b) => a.connections - b.connections || a.shard.localeCompare(b.shard));
   return loads[0].shard;
 }
@@ -172,7 +189,7 @@ app.post<{ Body: { mode?: AssignMode } }>("/assign", async (req, reply) => {
     }
   }
 
-  const shard = await pickLeastLoadedShard();
+  const shard = await pickShardForNewRoom();
   if (shard === null) {
     return reply.code(503).send({ error: "no game session available" });
   }

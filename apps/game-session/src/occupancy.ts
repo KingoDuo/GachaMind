@@ -10,6 +10,7 @@ import {
 import type { ShardIdentity } from "./config.js";
 import { redis } from "./redis.js";
 import type { Room, RoomManager } from "./room.js";
+import { syncTaskProtection } from "./protection.js";
 
 /** 이 프로세스의 샤드 이름과 주소. 기동 시 index.ts 가 한 번 정한다. */
 let self: ShardIdentity;
@@ -104,6 +105,8 @@ export function startProjectionHeartbeat(roomManager: RoomManager): NodeJS.Timeo
   const timer = setInterval(() => {
     for (const room of roomManager.allRooms) void syncOccupancy(room);
     void publishSessionLoad(roomManager);
+    // 방이 있는 동안 scale-in 보호가 만료되지 않게 같이 갱신한다.
+    void syncTaskProtection(roomManager.roomCount);
   }, PROJECTION_HEARTBEAT_INTERVAL_MS);
   // 하트비트 때문에 프로세스가 종료되지 못하는 일이 없도록 한다.
   timer.unref();

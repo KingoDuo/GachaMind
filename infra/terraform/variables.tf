@@ -43,6 +43,16 @@ variable "image_tags" {
   }
 }
 
+variable "game_session_scaling" {
+  description = <<-EOT
+    game-session 태스크 오토스케일링 범위와 목표. 태스크당 vCPU 1개(task cpu 1024)를 기준으로
+    평균 CPU 사용률이 target 을 넘으면 태스크(샤드)를 늘리고, 밑돌면 줄인다(방이 있는 태스크는 보호되어 안 죽는다).
+    max 는 app 인스턴스 최대 대수 × 2(vCPU) 에 맞춘다.
+  EOT
+  type        = object({ min = number, max = number, target_cpu = number })
+  default     = { min = 1, max = 8, target_cpu = 60 }
+}
+
 variable "game_session_count" {
   description = <<-EOT
     game-session 태스크(샤드) 초기 개수. 샤드는 미리 이름을 정한 목록이 아니라 태스크 하나하나이고,

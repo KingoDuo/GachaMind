@@ -20,6 +20,7 @@ import {
 } from "./occupancy.js";
 import { notifyRoomClosed } from "./matchmaking.js";
 import { closeEventPublisher } from "./events.js";
+import { syncTaskProtection } from "./protection.js";
 import { redis } from "./redis.js";
 import { identifyConnection, type Identity } from "./auth.js";
 
@@ -122,6 +123,7 @@ async function handleJoin(
 
   void syncOccupancy(room);
   void publishSessionLoad(roomManager);
+  void syncTaskProtection(roomManager.roomCount);
 
   // 입장자에게는 현재 상태 스냅샷, 나머지에게는 입장 사실만 보낸다.
   room.send(playerId, {
@@ -254,6 +256,7 @@ function handleClose(state: ConnectionState): void {
     void syncOccupancy(room);
   }
   void publishSessionLoad(roomManager);
+  void syncTaskProtection(roomManager.roomCount);
 }
 
 // 방이 없어도 배정 대상이 되려면 뜨자마자 한 번 보고해야 한다.

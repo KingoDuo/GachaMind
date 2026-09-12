@@ -92,6 +92,8 @@ locals {
   #   lb        ALB 타깃그룹 ARN(있으면 ECS 가 타깃을 등록한다)
   #   rolling   true 면 옛/새 태스크 공존 롤링, false 면 내리고 올리기
   #   core      true 면 core 인스턴스에 고정(상태 있는 것), false 면 app 인스턴스(ASG)에만
+  #   cpu       태스크 CPU 한도(1024 = vCPU 1개). 오토스케일링의 CPU 사용률은 이 값 대비라 스케일링 대상엔 필수.
+  #   task_role 앱 코드가 AWS API 를 부를 때 쓰는 롤 ARN
   services = merge(
     {
       redis = {
@@ -167,6 +169,9 @@ locals {
         image  = local.ecr["game-session"]
         port   = 4001
         memory = 256
+        # 샤드 하나 = 코어 하나. Node 는 단일 스레드라 이 이상은 못 쓰고, CPU 사용률 지표의 분모가 된다.
+        cpu       = 1024
+        task_role = aws_iam_role.game_session_task.arn
         env = {
           PORT            = "4001"
           MATCHMAKING_URL = local.matchmaking
@@ -180,15 +185,17 @@ locals {
   )
 
   service_defaults = {
-    port     = null
-    env      = {}
-    secrets  = {}
-    volumes  = []
-    connect  = false
-    protocol = null
-    lb       = null
-    rolling  = true
-    core     = false
+    port      = null
+    env       = {}
+    secrets   = {}
+    volumes   = []
+    connect   = false
+    protocol  = null
+    lb        = null
+    rolling   = true
+    core      = false
+    cpu       = null
+    task_role = null
   }
   svc = { for k, v in local.services : k => merge(local.service_defaults, v) }
 }
@@ -206,6 +213,8 @@ resource "aws_ecs_task_definition" "svc" {
   network_mode             = "bridge"
   requires_compatibilities = ["EC2"]
   execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = each.value.task_role
+  cpu                      = each.value.cpu
 
   runtime_platform {
     cpu_architecture        = "ARM64"
@@ -399,4 +408,34 @@ resource "aws_ecs_service" "game_session" {
     terraform_data.wait_for_container_instance,
     aws_ecs_cluster_capacity_providers.main,
   ]
+}
+
+# game-session 태스크 오토스케일링. 태스크 = 샤드이므로 이게 곧 "샤드를 늘리고 줄이는" 장치다.
+# 지표는 서비스 평균 CPU(태스크 cpu 1024 대비). 그림 좌표 팬아웃이 CPU 를 쓰므로 방이 붐비면 올라간다.
+# 줄일 때는 방이 있는 태스크가 scale-in 보호(apps/game-session/src/protection.ts)로 제외되고 빈 태스크부터 내린다.
+# 인스턴스는 capacity provider 가 따라 늘리고 줄인다.
+resource "aws_appautoscaling_target" "game_session" {
+  service_namespace  = "ecs"
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.game_session.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  min_capacity       = var.game_session_scaling.min
+  max_capacity       = var.game_session_scaling.max
+}
+
+resource "aws_appautoscaling_policy" "game_session_cpu" {
+  name               = "gachamind-game-session-cpu"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.game_session.service_namespace
+  resource_id        = aws_appautoscaling_target.game_session.resource_id
+  scalable_dimension = aws_appautoscaling_target.game_session.scalable_dimension
+
+  target_tracking_scaling_policy_configuration {
+    target_value = var.game_session_scaling.target_cpu
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+    # 늘리는 건 빨리(새 인스턴스까지 2~3분이 더 걸린다), 줄이는 건 천천히(게임 한 판이 끝나야 빈 샤드가 생긴다).
+    scale_out_cooldown = 60
+    scale_in_cooldown  = 300
+  }
 }
