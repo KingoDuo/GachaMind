@@ -10,9 +10,24 @@ variable "domain" {
 }
 
 variable "instance_type" {
-  description = "ECS 컨테이너 인스턴스. 이미지가 arm64(Apple Silicon 빌드)라 Graviton(t4g) 계열이어야 한다."
+  description = "core 인스턴스(redis/postgres/rabbitmq 고정). 이미지가 arm64 라 Graviton(t4g) 계열이어야 한다."
+  type        = string
+  default     = "t4g.small"
+}
+
+variable "app_instance_type" {
+  description = "app 인스턴스(무상태 앱 + game-session 샤드). ASG 로 늘린다. arm64 → t4g 계열."
   type        = string
   default     = "t4g.medium"
+}
+
+variable "app_instance_max" {
+  description = <<-EOT
+    app ASG 최대 인스턴스 수. 대수는 ECS capacity provider 가 태스크 배치 필요에 따라 0~max 사이에서 자동 조정한다.
+    infra/env.sh 가 down 때 max 를 0 으로, up 때 이 값으로 되돌린다(Terraform 은 max/desired 변경을 무시한다).
+  EOT
+  type        = number
+  default     = 4
 }
 
 variable "image_tags" {
@@ -28,8 +43,11 @@ variable "image_tags" {
   }
 }
 
-variable "game_session_ports" {
-  description = "game-session 샤드 포트 목록. 하나당 ECS 서비스가 하나 생긴다."
-  type        = list(number)
-  default     = [4001, 4002]
+variable "game_session_shards" {
+  description = <<-EOT
+    game-session 샤드 이름 목록. 하나당 ECS 서비스(game-session-{이름})·타깃그룹·ALB 경로(/gs/{이름})가 하나씩 생긴다.
+    컨테이너 포트는 전부 4001 로 같고(bridge 라 호스트 포트는 동적) 샤드는 이름으로만 구분한다.
+  EOT
+  type        = list(string)
+  default     = ["1", "2"]
 }

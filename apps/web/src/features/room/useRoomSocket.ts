@@ -4,6 +4,7 @@ import type {
   ClientToServerMessage,
   GamePhase,
   PlayerSummary,
+  RoomAssignment,
   ServerToClientMessage,
   StrokeSegment,
 } from "@gachamind/shared";
@@ -120,15 +121,15 @@ export function useRoomSocket(roomId: string, nickname: string | null) {
         if (!cancelled) setStatus("not-found");
         return;
       }
-      const { port } = await res.json();
+      const { shard } = (await res.json()) as RoomAssignment;
       if (cancelled) return;
 
-      // https(프로덕션)면 로드밸런서가 /gs/{port} 경로를 해당 game-session 샤드로 넘긴다(infra/terraform/lb.tf).
-      // http(로컬)면 샤드 포트에 직접 붙는다.
+      // https(프로덕션)면 로드밸런서가 /gs/{shard} 경로를 해당 game-session 샤드로 넘긴다(infra/terraform/lb.tf).
+      // http(로컬)면 프록시가 없어 샤드에 직접 붙어야 하는데, 로컬은 샤드 이름이 곧 포트다(game-session config.ts).
       const wsUrl =
         window.location.protocol === "https:"
-          ? `wss://${window.location.host}/gs/${port}`
-          : `ws://${window.location.hostname}:${port}`;
+          ? `wss://${window.location.host}/gs/${shard}`
+          : `ws://${window.location.hostname}:${shard}`;
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
 

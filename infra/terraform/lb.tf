@@ -1,9 +1,10 @@
 # ALB 하나가 모든 외부 트래픽의 입구다.
 #   :80  → 443 으로 리다이렉트
 #   :443 (ACM 인증서)
-#        기본           → web (EC2:80)
-#        /gs/{port}/*   → game-session 샤드 (EC2:{port})   ← 브라우저는 wss://도메인/gs/4001 로 붙는다
-# 타깃은 전부 같은 EC2 인스턴스의 다른 포트다(host 네트워크). 인스턴스가 늘면 타깃만 추가하면 된다.
+#        기본           → web 타깃그룹
+#        /gs/{shard}/*  → game-session 샤드 타깃그룹   ← 브라우저는 wss://도메인/gs/1 로 붙는다
+# 타깃그룹의 내용물(어느 인스턴스의 어느 포트)은 Terraform 이 아니라 ECS 가 채운다(ecs.tf 의 load_balancer 블록).
+# 태스크가 뜨면 등록되고 내려가면 빠지므로, 여기선 그릇(타깃그룹)과 라우팅 규칙만 정의한다.
 
 resource "aws_security_group" "alb" {
   name        = "gachamind-alb"
@@ -46,12 +47,16 @@ resource "aws_lb" "main" {
 resource "aws_lb_target_group" "web" {
   name        = "gachamind-web"
   vpc_id      = aws_vpc.main.id
-  port        = 80
+  port        = 80 # ECS 가 등록할 때 실제(동적) 포트로 덮어쓴다. 형식상 필요한 값.
   protocol    = "HTTP"
   target_type = "instance"
 
+  # 새 태스크가 헬스체크를 통과해야 트래픽을 받고, 그때서야 옛 태스크가 빠진다(무중단 배포의 근거).
+  # 옛 태스크가 빠질 때 진행 중 요청을 기다리는 시간. web 은 짧은 요청뿐이라 길 필요 없다.
+  deregistration_delay = 10
+
   health_check {
-    path                = "/"
+    path                = "/api/health"
     matcher             = "200"
     interval            = 30
     healthy_threshold   = 2
@@ -59,20 +64,17 @@ resource "aws_lb_target_group" "web" {
   }
 }
 
-resource "aws_lb_target_group_attachment" "web" {
-  target_group_arn = aws_lb_target_group.web.arn
-  target_id        = aws_instance.ecs_host.id
-  port             = 80
-}
-
-# ── 타깃그룹: game-session 샤드(포트마다 하나) ──
+# ── 타깃그룹: game-session 샤드(이름마다 하나) ──
 resource "aws_lb_target_group" "game_session" {
-  for_each    = toset([for p in var.game_session_ports : tostring(p)])
+  for_each    = toset(var.game_session_shards)
   name        = "gachamind-gs-${each.key}"
   vpc_id      = aws_vpc.main.id
-  port        = tonumber(each.key)
+  port        = 4001 # 형식상 값. 실제 포트는 ECS 가 등록한다.
   protocol    = "HTTP"
   target_type = "instance"
+
+  # 샤드는 "내리고 올리기" 배포라 빠지는 타깃에 남은 연결을 오래 붙들 이유가 없다.
+  deregistration_delay = 10
 
   health_check {
     path                = "/health"
@@ -81,13 +83,6 @@ resource "aws_lb_target_group" "game_session" {
     healthy_threshold   = 2
     unhealthy_threshold = 3
   }
-}
-
-resource "aws_lb_target_group_attachment" "game_session" {
-  for_each         = aws_lb_target_group.game_session
-  target_group_arn = each.value.arn
-  target_id        = aws_instance.ecs_host.id
-  port             = tonumber(each.key)
 }
 
 # ── 리스너 ──
@@ -120,13 +115,13 @@ resource "aws_lb_listener" "https" {
 }
 
 resource "aws_lb_listener_rule" "game_session" {
-  for_each     = aws_lb_target_group.game_session
+  for_each     = toset(var.game_session_shards)
   listener_arn = aws_lb_listener.https.arn
-  priority     = 100 + tonumber(each.key) - 4000 # 4001 → 101, 4002 → 102 …
+  priority     = 101 + index(var.game_session_shards, each.key) # 목록 순서대로 101, 102 …
 
   action {
     type             = "forward"
-    target_group_arn = each.value.arn
+    target_group_arn = aws_lb_target_group.game_session[each.key].arn
   }
 
   condition {
