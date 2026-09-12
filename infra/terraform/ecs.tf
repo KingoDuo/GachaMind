@@ -1,4 +1,4 @@
-# ECS 클러스터 + 서비스 9개. docker-compose.yml 의 services 블록과 1:1 로 대응한다.
+# ECS 클러스터 + 서비스 9개. docker-compose.yml 의 services 블록과 1:1 로 대응한다(game-session 샤드는 서비스 하나).
 #
 # 네트워크 모드는 bridge + 동적 호스트 포트(hostPort 0).
 #   - 컨테이너는 각자 고정 포트(web 80, matchmaking 4000 …)를 열고, EC2 쪽 포트는 Docker 가 빈 것을 고른다.
@@ -10,7 +10,12 @@
 #     인스턴스가 여러 대가 돼도 이름은 그대로다.
 #
 # 배포: 무상태 서비스는 새 태스크가 헬스체크를 통과한 뒤 옛 태스크를 내리는 롤링(min 100 / max 200).
-# game-session 은 샤드 하나가 방을 메모리에 들고 있어 같은 샤드 둘이 공존하면 안 되므로 "내리고 올리기"(min 0 / max 100).
+# game-session 도 롤링이다 — 샤드 = 태스크라 새 태스크는 새 이름으로 등록되고 옛 태스크는 방을 정리하고 내려간다.
+# postgres 만 데이터 디렉토리를 두 프로세스가 동시에 열면 안 되므로 "내리고 올리기"(min 0 / max 100).
+#
+# game-session 은 ALB 뒤에 있지 않다. 방이 특정 프로세스에 있어 ALB 가 고를 수 없으므로, 브라우저의 /gs/{shard} 는
+# ALB → gs-gateway(무상태) → Redis 에서 그 샤드의 (인스턴스 IP, 동적 포트)를 찾아 TCP 로 이어 준다.
+# 그래서 game-session 은 타깃그룹이 없고, 대신 자기 주소를 Redis 에 스스로 등록한다(ECS 컨테이너 메타데이터 파일).
 #
 # 배치: 상태 있는 것(redis/postgres/rabbitmq)은 core 인스턴스에 고정(core = true, launch_type EC2),
 # 나머지는 app capacity provider 로 띄운다 — app ASG 인스턴스에만 놓이고, 자리가 모자라면 ECS 가 인스턴스를 늘린다.
@@ -87,6 +92,8 @@ locals {
   #   lb        ALB 타깃그룹 ARN(있으면 ECS 가 타깃을 등록한다)
   #   rolling   true 면 옛/새 태스크 공존 롤링, false 면 내리고 올리기
   #   core      true 면 core 인스턴스에 고정(상태 있는 것), false 면 app 인스턴스(ASG)에만
+  #   cpu       태스크 CPU 한도(1024 = vCPU 1개). 오토스케일링의 CPU 사용률은 이 값 대비라 스케일링 대상엔 필수.
+  #   task_role 앱 코드가 AWS API 를 부를 때 쓰는 롤 ARN
   services = merge(
     {
       redis = {
@@ -124,16 +131,20 @@ locals {
         lb     = aws_lb_target_group.web.arn
       }
       matchmaking = {
-        image  = local.ecr["matchmaking"]
-        port   = 4000
-        memory = 128
-        env = {
-          PORT                = "4000"
-          REDIS_URL           = local.redis_url
-          GAME_SESSION_SHARDS = join(",", var.game_session_shards)
-        }
+        image    = local.ecr["matchmaking"]
+        port     = 4000
+        memory   = 128
+        env      = { PORT = "4000", REDIS_URL = local.redis_url }
         connect  = true
         protocol = "http"
+      }
+      # 브라우저 WebSocket 을 방이 있는 샤드로 이어 주는 중계기. Redis 만 읽는다.
+      gs-gateway = {
+        image  = local.ecr["gs-gateway"]
+        port   = 4100
+        memory = 128
+        env    = { PORT = "4100", REDIS_URL = local.redis_url }
+        lb     = aws_lb_target_group.gs_gateway.arn
       }
       user = {
         image    = local.ecr["user"]
@@ -151,38 +162,40 @@ locals {
         env    = { RABBITMQ_URL = local.rabbitmq_url, USER_URL = local.user }
       }
     },
-    # game-session 샤드: 이름 하나당 서비스 하나(game-session-1, game-session-2 …). 태스크 정의는 SHARD_ID 만 다르다.
-    # 브라우저가 wss://도메인/gs/{shard} 로 붙으면 ALB 가 그 샤드의 타깃그룹으로 보낸다.
+    # game-session: 태스크 하나가 샤드 하나. 태스크 정의는 전부 같고, 이름(태스크 id)과 주소는 각자 메타데이터에서 읽어 등록한다.
+    # desired_count 는 오토스케일링이 소유하므로 서비스 리소스를 따로 둔다(아래 aws_ecs_service.game_session).
     {
-      for shard in var.game_session_shards : "game-session-${shard}" => {
+      game-session = {
         image  = local.ecr["game-session"]
         port   = 4001
         memory = 256
+        # 샤드 하나 = 코어 하나. Node 는 단일 스레드라 이 이상은 못 쓰고, CPU 사용률 지표의 분모가 된다.
+        cpu       = 1024
+        task_role = aws_iam_role.game_session_task.arn
         env = {
           PORT            = "4001"
-          SHARD_ID        = shard
           MATCHMAKING_URL = local.matchmaking
           REDIS_URL       = local.redis_url
           RABBITMQ_URL    = local.rabbitmq_url
         }
         # user 가 서명한 세션 쿠키를 검증한다. 없으면 dev-secret 으로 검증해 로그인한 사람도 게스트로 보인다.
         secrets = { JWT_SECRET = aws_ssm_parameter.jwt_secret.arn }
-        lb      = aws_lb_target_group.game_session[shard].arn
-        rolling = false
       }
     },
   )
 
   service_defaults = {
-    port     = null
-    env      = {}
-    secrets  = {}
-    volumes  = []
-    connect  = false
-    protocol = null
-    lb       = null
-    rolling  = true
-    core     = false
+    port      = null
+    env       = {}
+    secrets   = {}
+    volumes   = []
+    connect   = false
+    protocol  = null
+    lb        = null
+    rolling   = true
+    core      = false
+    cpu       = null
+    task_role = null
   }
   svc = { for k, v in local.services : k => merge(local.service_defaults, v) }
 }
@@ -200,6 +213,8 @@ resource "aws_ecs_task_definition" "svc" {
   network_mode             = "bridge"
   requires_compatibilities = ["EC2"]
   execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = each.value.task_role
+  cpu                      = each.value.cpu
 
   runtime_platform {
     cpu_architecture        = "ARM64"
@@ -243,7 +258,8 @@ resource "aws_ecs_task_definition" "svc" {
 }
 
 resource "aws_ecs_service" "svc" {
-  for_each = local.svc
+  # game-session 은 desired_count 를 오토스케일링이 소유해 lifecycle 이 다르므로 아래 별도 리소스로 둔다.
+  for_each = { for k, v in local.svc : k => v if k != "game-session" }
 
   name            = each.key
   cluster         = aws_ecs_cluster.main.id
@@ -332,6 +348,94 @@ resource "aws_ecs_service" "svc" {
     terraform_data.wait_for_container_instance,
     aws_ecs_cluster_capacity_providers.main,
     aws_lb_listener.https,
-    aws_lb_listener_rule.game_session,
+    aws_lb_listener_rule.gs_gateway,
   ]
+}
+
+# game-session 서비스. aws_ecs_service.svc 와 같은 모양이되 desired_count 를 Terraform 이 소유하지 않는다:
+# 초기값만 주고, 이후엔 오토스케일링(또는 update-service)이 바꾼 값을 apply 가 되돌리지 않는다.
+resource "aws_ecs_service" "game_session" {
+  name            = "game-session"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.svc["game-session"].arn
+  desired_count   = var.game_session_count
+
+  capacity_provider_strategy {
+    capacity_provider = aws_ecs_capacity_provider.app.name
+    weight            = 1
+  }
+  force_new_deployment = true
+
+  # 롤링: 새 태스크(새 샤드)가 뜬 뒤 옛 태스크가 SIGTERM 으로 방을 정리하고 내려간다.
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  placement_constraints {
+    type       = "memberOf"
+    expression = "attribute:role == app"
+  }
+
+  # 샤드는 코어 하나를 통째로 쓰는 게 이상적이라 인스턴스에 고르게 퍼뜨린다.
+  ordered_placement_strategy {
+    type  = "spread"
+    field = "instanceId"
+  }
+
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.main.arn
+
+    log_configuration {
+      log_driver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.svc["game-session"].name
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "service-connect"
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
+
+  depends_on = [
+    terraform_data.wait_for_container_instance,
+    aws_ecs_cluster_capacity_providers.main,
+  ]
+}
+
+# game-session 태스크 오토스케일링. 태스크 = 샤드이므로 이게 곧 "샤드를 늘리고 줄이는" 장치다.
+# 지표는 서비스 평균 CPU(태스크 cpu 1024 대비). 그림 좌표 팬아웃이 CPU 를 쓰므로 방이 붐비면 올라간다.
+# 줄일 때는 방이 있는 태스크가 scale-in 보호(apps/game-session/src/protection.ts)로 제외되고 빈 태스크부터 내린다.
+# 인스턴스는 capacity provider 가 따라 늘리고 줄인다.
+resource "aws_appautoscaling_target" "game_session" {
+  service_namespace  = "ecs"
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.game_session.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  min_capacity       = var.game_session_scaling.min
+  max_capacity       = var.game_session_scaling.max
+}
+
+resource "aws_appautoscaling_policy" "game_session_cpu" {
+  name               = "gachamind-game-session-cpu"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.game_session.service_namespace
+  resource_id        = aws_appautoscaling_target.game_session.resource_id
+  scalable_dimension = aws_appautoscaling_target.game_session.scalable_dimension
+
+  target_tracking_scaling_policy_configuration {
+    target_value = var.game_session_scaling.target_cpu
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+    # 늘리는 건 빨리(새 인스턴스까지 2~3분이 더 걸린다), 줄이는 건 천천히(게임 한 판이 끝나야 빈 샤드가 생긴다).
+    scale_out_cooldown = 60
+    scale_in_cooldown  = 300
+  }
 }

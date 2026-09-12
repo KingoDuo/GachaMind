@@ -7,9 +7,16 @@ import {
   type RoomProjection,
   type SessionLoad,
 } from "@gachamind/shared";
-import { SHARD_ID } from "./config.js";
+import type { ShardIdentity } from "./config.js";
 import { redis } from "./redis.js";
 import type { Room, RoomManager } from "./room.js";
+import { syncTaskProtection } from "./protection.js";
+
+/** 이 프로세스의 샤드 이름과 주소. 기동 시 index.ts 가 한 번 정한다. */
+let self: ShardIdentity;
+export function setShardIdentity(identity: ShardIdentity): void {
+  self = identity;
+}
 
 /**
  * 방의 현재 인원을 Redis에 반영한다.
@@ -18,7 +25,7 @@ import type { Room, RoomManager } from "./room.js";
  */
 export async function syncOccupancy(room: Room): Promise<void> {
   const projection: RoomProjection = {
-    shard: SHARD_ID,
+    shard: self.shardId,
     capacity: room.capacity,
     playerCount: room.size,
     phase: room.phase,
@@ -47,7 +54,9 @@ export async function syncOccupancy(room: Room): Promise<void> {
  */
 export async function publishSessionLoad(roomManager: RoomManager): Promise<void> {
   const load: SessionLoad = {
-    shard: SHARD_ID,
+    shard: self.shardId,
+    host: self.host,
+    port: self.port,
     rooms: roomManager.roomCount,
     connections: roomManager.totalConnections,
   };
@@ -55,8 +64,8 @@ export async function publishSessionLoad(roomManager: RoomManager): Promise<void
   try {
     await redis
       .pipeline()
-      .hset(sessionLoadKey(SHARD_ID), load)
-      .expire(sessionLoadKey(SHARD_ID), PROJECTION_TTL_SECONDS)
+      .hset(sessionLoadKey(self.shardId), load)
+      .expire(sessionLoadKey(self.shardId), PROJECTION_TTL_SECONDS)
       .exec();
   } catch (err) {
     console.error(`[occupancy] session load publish failed:`, err);
@@ -66,7 +75,7 @@ export async function publishSessionLoad(roomManager: RoomManager): Promise<void
 /** 정상 종료 시 부하 보고를 지운다. TTL을 기다리지 않고 즉시 배정 대상에서 빠진다. */
 export async function clearSessionLoad(): Promise<void> {
   try {
-    await redis.del(sessionLoadKey(SHARD_ID));
+    await redis.del(sessionLoadKey(self.shardId));
   } catch (err) {
     console.error(`[occupancy] session load clear failed:`, err);
   }
@@ -80,7 +89,7 @@ export async function clearSessionLoad(): Promise<void> {
 export async function isRoomAssignedHere(roomId: string): Promise<boolean> {
   try {
     const shard = await redis.hget(roomHashKey(roomId), "shard");
-    return shard === SHARD_ID;
+    return shard === self.shardId;
   } catch (err) {
     // Redis가 흔들릴 때 입장을 막으면 게임 전체가 멈춘다. 유령 방 방지는 부차적이므로 통과시킨다.
     console.error(`[occupancy] assignment check failed for ${roomId}, allowing join:`, err);
@@ -96,6 +105,8 @@ export function startProjectionHeartbeat(roomManager: RoomManager): NodeJS.Timeo
   const timer = setInterval(() => {
     for (const room of roomManager.allRooms) void syncOccupancy(room);
     void publishSessionLoad(roomManager);
+    // 방이 있는 동안 scale-in 보호가 만료되지 않게 같이 갱신한다.
+    void syncTaskProtection(roomManager.roomCount);
   }, PROJECTION_HEARTBEAT_INTERVAL_MS);
   // 하트비트 때문에 프로세스가 종료되지 못하는 일이 없도록 한다.
   timer.unref();
