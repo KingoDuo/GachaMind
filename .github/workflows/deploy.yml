@@ -1,6 +1,7 @@
 # main 에 push 되면 바뀐 서비스만 빌드·push 하고 terraform apply 로 ECS 에 반영한다.
 #
 #   detect  어떤 앱이 바뀌었나 (apps/<svc>/** → 그 앱, shared/Dockerfile/lockfile → 전부, ECS 에 없는 서비스 → 반드시)
+#   ecr     ECR 저장소만 먼저 apply (새 앱의 첫 배포에서 push 가 실패하지 않게)
 #   build   바뀐 앱만 arm64 이미지 빌드 → ECR push (태그 = 커밋 sha)
 #   deploy  image_tags = { 바뀐 앱: 새 sha, 나머지: 지금 ECS 에 있는 태그 } 로 terraform apply
 #
@@ -80,8 +81,31 @@ jobs:
           echo "services=[$(IFS=,; echo "${list[*]}")]" >> "$GITHUB_OUTPUT"
       - run: echo "build targets → ${{ steps.pick.outputs.services }}"
 
-  build:
+  # ECR 저장소는 이미지를 push 하기 전에 있어야 한다. 저장소는 Terraform 이 만드는데 apply 는 build 뒤에 돌므로,
+  # 새 앱을 추가한 첫 배포에서 push 가 "저장소 없음"으로 실패한다. 그래서 저장소만 먼저 targeted apply 한다.
+  ecr:
     needs: detect
+    if: needs.detect.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.0"
+          terraform_wrapper: false
+      - run: terraform -chdir=infra/terraform init -input=false
+      # image_tags 는 변수 검증 때문에 넘길 뿐, -target 이라 태스크 정의에는 닿지 않는다.
+      - run: >-
+          terraform -chdir=infra/terraform apply -input=false -auto-approve
+          -target=aws_ecr_repository.app -target=aws_ecr_lifecycle_policy.app
+          -var 'image_tags={"web"="x","matchmaking"="x","game-session"="x","gs-gateway"="x","user"="x","results-worker"="x"}'
+
+  build:
+    needs: [detect, ecr]
     if: needs.detect.outputs.services != '[]'
     runs-on: ubuntu-latest
     strategy:
