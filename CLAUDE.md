@@ -14,7 +14,8 @@
 |---|---|---|---|
 | **web** | UI 렌더 + BFF(프론트도어). 브라우저의 유일한 진입점 | Next.js (App Router) | 무상태 |
 | **matchmaking** | 방 탐색·배정. 어느 replica에 방이 있는지 관리 | Fastify | Redis 공유상태 |
-| **game-session** | 실시간 게임 authority(그림·채팅·정답판정·게임루프). replica로 수평확장 | 프레임워크 없는 `ws` (또는 Colyseus) | 인메모리(휘발성) |
+| **game-session** | 실시간 게임 authority(그림·채팅·정답판정·게임루프). 태스크 하나가 샤드 하나, 수평확장 | 프레임워크 없는 `ws` | 인메모리(휘발성) |
+| **gs-gateway** | 브라우저 WebSocket 을 방이 있는 샤드로 이어 주는 무상태 TCP 중계기(AWS 전용 경로) | Node `http`+`net` | 무상태 |
 | **user** | 가입·로그인·프로필·전적 | NestJS + Postgres | 유일한 영속 DB 소유 |
 | **results-worker** | 게임 결과 영속화·랭킹 집계 | Node + amqplib | 무상태 워커 |
 
@@ -39,7 +40,7 @@
   - `web`(3000) — UI/BFF.
   - `game-session`(4001~) — 클라이언트가 **WebSocket으로 직접 접속**. 초당 수백~수천 건 실시간이라 web을 거치지 않는다.
 
-**샤드는 포트가 아니라 이름으로 가린다.** game-session 프로세스마다 `SHARD_ID`(AWS 는 `1`, `2` …)가 있고 Redis 사본·배정 응답·접속 경로(`/gs/{shard}`)가 전부 이 이름을 쓴다. 인스턴스가 여러 대면 같은 포트가 여러 샤드에 있어 포트로는 못 가리기 때문이다. 로컬(pnpm dev/compose)은 프록시가 없어 브라우저가 포트로 직접 붙어야 하므로 `SHARD_ID`를 안 주면 포트가 이름이 된다(`4001`, `4002`). matchmaking 은 `GAME_SESSION_SHARDS`로 후보 목록을 받는다.
+**샤드는 미리 정한 목록이 아니라 "지금 떠 있는 프로세스"다.** game-session 프로세스는 뜰 때 자기 이름(AWS 는 ECS 태스크 id, 로컬은 포트)과 닿을 수 있는 주소(인스턴스 사설 IP + 동적 호스트 포트)를 정해 Redis `session:{shard}`에 등록하고 TTL 로 유지한다(`config.ts` — ECS 컨테이너 메타데이터 파일에서 읽는다). 그래서 샤드가 늘고 줄어도(오토스케일링·크래시) 아무도 목록을 관리하지 않는다: matchmaking 은 `session:*` 를 스캔해 후보를 고르고, gs-gateway 는 접속 경로 `/gs/{shard}` 의 이름을 같은 키로 실제 주소로 바꿔 TCP 로 이어 준다. 로컬(pnpm dev/compose)은 게이트웨이 없이 브라우저가 샤드 포트로 직접 붙는다(샤드 이름 = 포트).
 - **내부(web/서비스만 호출):**
   - `matchmaking`·`user`·`results-worker` — 브라우저는 직접 안 부른다.
 
@@ -51,7 +52,7 @@
    - `room:{roomId}` Hash `{ shard, capacity, playerCount, phase }`, `rooms:joinable` Set(정원 남은 방), `session:{shard}` Hash(샤드별 부하).
    - **빠른 매칭**: `rooms:joinable`에서 무작위로 하나 골라 난입("진행 중인 방에 랜덤 난입"이 기본 옵션). 없으면 새 방.
    - **새 방**: least-connections로 가장 한가한 game-session 샤드에 배정.
-3. 클라이언트는 배정받은 샤드의 game-session에 WS로 직접 연결.
+3. 클라이언트는 배정받은 샤드로 WS 연결. 프로덕션은 `wss://도메인/gs/{shard}` → ALB → gs-gateway → (Redis 에서 주소 조회) → 그 샤드. 로컬은 `ws://host:{shard}` 직결.
 4. game-session은 **occupancy(playerCount)와 joinable 소속만** Redis에 갱신하고, 방이 비면 matchmaking에 정리 콜백(DELETE)을 보낸다.
 
 방 코드는 사람이 부르고 받아 적는 값이라 5자리 Crockford Base32(`packages/shared`의 `generateRoomCode`)다. 짧은 만큼 충돌이 가능해서 matchmaking이 Redis `HSETNX`로 코드를 선점해야 확정된다. 코드를 받는 입구(web 입장 폼·URL, matchmaking 조회, game-session join)는 전부 `normalizeRoomCode`를 통과시켜 대소문자·O/0 표기 차이를 흡수한다.
@@ -92,14 +93,15 @@ apps/
   web/             # Next.js — UI + BFF.  /api/rooms 는 matchmaking, /api/auth 는 user 로 프록시(세션 쿠키↔토큰)
                    #   app/(입구) app/lobby app/room/[roomId], features/{auth,lobby,room,player,ui}
   matchmaking/     # Fastify — 방 배정 (Redis 매칭 상태 소유)
-  game-session/    # ws — 실시간 authority. src/room.ts(Room/RoomManager), src/index.ts
+  game-session/    # ws — 실시간 authority. src/room.ts(Room/RoomManager), src/index.ts, src/config.ts(샤드 이름·주소 결정)
+  gs-gateway/      # /gs/{shard} WebSocket 을 Redis 의 session:{shard} 주소로 이어 주는 중계기
   user/            # NestJS + TypeORM(Postgres). 가입·로그인·JWT 발급 (users 테이블 소유)
   results-worker/  # Node + amqplib — 게임 이벤트 소비 → games/game_players 기록
 packages/
   shared/          # 서비스 간 계약 (메시지 타입, Redis 키, MQ 이벤트 스키마)
 infra/
-  docker-compose.yml   # redis + postgres + rabbitmq + 5개 서비스
-Dockerfile         # 5개 서비스 공용. SERVICE 빌드 인자로 어느 앱의 이미지인지 정한다
+  docker-compose.yml   # redis + postgres + rabbitmq + 6개 서비스
+Dockerfile         # 6개 서비스 공용. SERVICE 빌드 인자로 어느 앱의 이미지인지 정한다
 ```
 
 ## 실행 방법
@@ -120,12 +122,12 @@ Docker 이미지는 루트 `Dockerfile` 하나로 만든다(`--build-arg SERVICE
 
 ## AWS 배포
 계정 `472227100986` / 서울(`ap-northeast-2`) / 도메인 `gachamind.com`(Route53). 인프라는 `infra/terraform`(Terraform, 상태는 S3 `gachamind-tfstate-…`), 배포는 `infra/deploy.sh`.
-- **현재 형태**: ECS on EC2, 인스턴스는 두 부류(arm64, `bridge` 네트워크·동적 호스트 포트). compose 의 서비스 9개가 ECS 서비스 9개로 1:1 대응한다.
+- **현재 형태**: ECS on EC2, 인스턴스는 두 부류(arm64, `bridge` 네트워크·동적 호스트 포트). ECS 서비스 10개(redis/postgres/rabbitmq/web/matchmaking/gs-gateway/user/results-worker/game-session). game-session 은 서비스 하나에 태스크 N개(`game_session_count` 초기값, 이후 desired 는 Terraform 이 무시)이고 태스크 하나가 샤드 하나다.
   - **core** 한 대 고정(`aws_instance`, t4g.small): 상태 있는 redis/postgres/rabbitmq 만. 인스턴스 ID 로 placement constraint 를 건다(Postgres 데이터가 이 디스크에 있어 갈아엎으면 사라진다).
-  - **app** ASG(`gachamind-app`, t4g.medium, 0~4대): web/matchmaking/user/worker/game-session 샤드. 이 ASG 는 **ECS capacity provider** `gachamind-app` 으로 묶여 있고, app 서비스는 `launch_type` 대신 이 capacity provider 로 뜬다. 대수는 사람이 아니라 ECS 관리형 스케일링이 정한다 — 태스크를 놓을 자리가 모자라면 인스턴스 +1, 비면 -1(target 100 = 남는 인스턴스 없이). 줄일 때 managed draining 이 태스크를 정상 종료시키지만 그 인스턴스의 game-session 샤드 방은 끊긴다. 태스크 수(`desired_count`)는 아직 고정 1 — 인스턴스가 늘어나는 걸 보려면 태스크 수를 올려 자리를 모자라게 만들어야 한다.
+  - **app** ASG(`gachamind-app`, t4g.medium, 0~4대): web/matchmaking/gs-gateway/user/worker/game-session. 이 ASG 는 **ECS capacity provider** `gachamind-app` 으로 묶여 있고, app 서비스는 `launch_type` 대신 이 capacity provider 로 뜬다. 대수는 사람이 아니라 ECS 관리형 스케일링이 정한다 — 태스크를 놓을 자리가 모자라면 인스턴스 +1, 비면 -1(target 100 = 남는 인스턴스 없이). 줄일 때 managed draining 이 태스크를 정상 종료시키지만 그 인스턴스의 game-session 샤드 방은 끊긴다. 태스크 수(`desired_count`)는 아직 고정 1 — 인스턴스가 늘어나는 걸 보려면 태스크 수를 올려 자리를 모자라게 만들어야 한다.
   - **켜고 끄기는 `infra/env.sh up [max] | down | status`**. 켜기 = core 기동 + ASG max 복구(태스크 6개가 자리를 요구하니 ECS 가 인스턴스를 띄운다), 끄기 = ASG max 0(인스턴스 정리) → core 정지. Terraform 은 ASG 의 desired/max 변경을 무시한다. 정지 중 남는 비용은 ALB 공인 IPv4 2개·core EBS·Route53 존. 서비스 간 호출은 **ECS Service Connect** 로 compose 와 같은 이름(`http://matchmaking:4000`, `redis://redis:6379`, `postgres:5432`)을 쓴다 — 태스크마다 붙는 프록시가 이름을 실제 (인스턴스, 포트)로 풀어주므로 인스턴스가 늘어도 env 값이 안 바뀐다. Redis/Postgres/RabbitMQ 도 아직 컨테이너(Postgres 는 `/data/postgres` 호스트 볼륨).
-- **ALB ↔ ECS 연동**: 타깃그룹의 내용물은 Terraform 이 아니라 **ECS 가 채운다**(`aws_ecs_service.load_balancer`). 태스크가 뜨면 (인스턴스, 동적 포트)가 등록되고 내려가면 빠진다. 무상태 서비스는 롤링(min 100/max 200)이라 새 태스크가 헬스체크를 통과한 뒤 옛 태스크가 빠지고, game-session 샤드·postgres 는 같은 것 둘이 공존하면 안 되므로 "내리고 올리기"(min 0/max 100). web `desired_count` 를 2로 올리면 ALB 가 두 태스크로 분산한다.
-- **입구는 ALB + ACM(HTTPS)**: Route53 apex/www → ALB Alias. `:80`→443 리다이렉트, `:443` 기본 → web 타깃그룹, **`/gs/{shard}/*` → 해당 game-session 샤드 타깃그룹**(`game_session_shards` 변수, 샤드 서비스 이름은 `game-session-{shard}`). EC2 SG 는 동적 포트 범위(32768~65535)를 ALB 와 같은 SG(Service Connect 프록시 간)에서만 받는다. 클라이언트는 https 페이지면 `wss://도메인/gs/{shard}`, http(로컬)면 `ws://host:{shard}` 로 붙는다(`useRoomSocket.ts`). game-session 은 같은 포트에 `GET /health`(ALB 헬스체크)와 30s WS ping(ALB idle timeout·유령 연결 정리)을 가진다. web 헬스체크는 `/api/health`.
+- **ALB ↔ ECS 연동**: 타깃그룹의 내용물은 Terraform 이 아니라 **ECS 가 채운다**(`aws_ecs_service.load_balancer`). 태스크가 뜨면 (인스턴스, 동적 포트)가 등록되고 내려가면 빠진다. 무상태 서비스와 game-session(샤드 = 태스크라 새 태스크는 새 이름)은 롤링(min 100/max 200)이고, postgres 만 "내리고 올리기"(min 0/max 100). web `desired_count` 를 2로 올리면 ALB 가 두 태스크로 분산한다. **game-session 은 ALB 뒤에 없다** — 방이 특정 프로세스에 있어 ALB 가 고를 수 없으므로 gs-gateway 가 Redis 를 보고 잇는다. ALB 는 "어느 서비스로"만 정하고, "그 서비스의 어느 프로세스로"는 무상태면 ALB 가 아무 데나, 상태 있으면 게이트웨이가 정한다.
+- **입구는 ALB + ACM(HTTPS)**: Route53 apex/www → ALB Alias. `:80`→443 리다이렉트, `:443` 기본 → web 타깃그룹, **`/gs/*` → gs-gateway 타깃그룹**(경로 규칙 하나). EC2 SG 는 동적 포트 범위(32768~65535)를 ALB 와 같은 SG(Service Connect 프록시 간)에서만 받는다. 클라이언트는 https 페이지면 `wss://도메인/gs/{shard}`, http(로컬)면 `ws://host:{shard}` 로 붙는다(`useRoomSocket.ts`). game-session 은 같은 포트에 `GET /health`와 30s WS ping(ALB idle timeout·유령 연결 정리)을 가진다. app 인스턴스는 `ECS_ENABLE_CONTAINER_METADATA=true` 라 컨테이너가 자기 태스크 id·인스턴스 IP·호스트 포트를 메타데이터 파일로 받는다. 헬스체크는 web `/api/health`, gs-gateway `/health`.
 - 비밀값(Postgres 비밀번호, `DATABASE_URL`, `JWT_SECRET`)은 Terraform 이 생성해 SSM Parameter Store 에 두고 태스크 정의가 ARN 으로 참조한다.
 - 브랜치: 기본 브랜치는 **`dev`**(작업 브랜치). `main` 은 배포 브랜치라 직접 push 를 막고 **dev → main PR 머지로만** 반영한다(GitHub ruleset `protect-main`: PR 필수·force push/삭제 금지). main 에 머지되는 순간이 배포 시점. 환경이 꺼져 있으면(env.sh down) apply 는 성공하되 새 태스크는 켤 때까지 대기한다(circuit breaker 가 롤백했으면 `deploy.sh apply` 로 다시 밀기).
 - 배포: **main 에 push 되면 GitHub Actions**(`.github/workflows/deploy.yml`)가 바뀐 앱만 arm64 이미지로 빌드(QEMU)·ECR push(태그 = 커밋 sha)하고, `image_tags` map(바뀐 앱 = 새 sha, 나머지 = 지금 배포된 태그)으로 `terraform apply` → 바뀐 서비스만 재배포(무상태 서비스는 무중단, 샤드는 몇 초 끊김). `packages/shared`·`Dockerfile`·lockfile 이 바뀌면 전부. AWS 권한은 OIDC 롤 `gachamind-github-deploy`(main 브랜치만). 수동 배포는 `infra/deploy.sh [all|build|push|apply] [service ...]`.

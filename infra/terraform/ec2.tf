@@ -57,6 +57,9 @@ resource "aws_launch_template" "app" {
     #!/bin/bash
     echo "ECS_CLUSTER=${aws_ecs_cluster.main.name}" >> /etc/ecs/ecs.config
     echo 'ECS_INSTANCE_ATTRIBUTES={"role":"app"}' >> /etc/ecs/ecs.config
+    # 컨테이너에 자기 태스크 id·인스턴스 사설 IP·호스트 포트가 적힌 메타데이터 파일을 넣어 준다.
+    # game-session 이 이걸 읽어 "나는 어느 샤드이고 어디로 오면 되는지"를 Redis 에 등록한다.
+    echo "ECS_ENABLE_CONTAINER_METADATA=true" >> /etc/ecs/ecs.config
   EOT
   )
 

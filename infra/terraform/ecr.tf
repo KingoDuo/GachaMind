@@ -1,6 +1,6 @@
 # 앱 서비스마다 이미지 저장소 하나. 이미지는 deploy.sh 가 빌드해서 push 한다.
 locals {
-  app_services = ["web", "matchmaking", "game-session", "user", "results-worker"]
+  app_services = ["web", "matchmaking", "game-session", "gs-gateway", "user", "results-worker"]
 }
 
 resource "aws_ecr_repository" "app" {

@@ -2,7 +2,9 @@
 #   :80  → 443 으로 리다이렉트
 #   :443 (ACM 인증서)
 #        기본           → web 타깃그룹
-#        /gs/{shard}/*  → game-session 샤드 타깃그룹   ← 브라우저는 wss://도메인/gs/1 로 붙는다
+#        /gs/*          → gs-gateway 타깃그룹   ← 브라우저는 wss://도메인/gs/{shard} 로 붙고, 게이트웨이가 그 샤드로 이어 준다
+# ALB 는 "어느 서비스로"만 정한다. 무상태 서비스(web, gs-gateway)는 타깃 사이를 그냥 나누면 되지만,
+# game-session 은 방이 특정 프로세스에 있어 ALB 로는 고를 수 없다 — 그 판단은 Redis 를 보는 gs-gateway 가 한다.
 # 타깃그룹의 내용물(어느 인스턴스의 어느 포트)은 Terraform 이 아니라 ECS 가 채운다(ecs.tf 의 load_balancer 블록).
 # 태스크가 뜨면 등록되고 내려가면 빠지므로, 여기선 그릇(타깃그룹)과 라우팅 규칙만 정의한다.
 
@@ -64,16 +66,15 @@ resource "aws_lb_target_group" "web" {
   }
 }
 
-# ── 타깃그룹: game-session 샤드(이름마다 하나) ──
-resource "aws_lb_target_group" "game_session" {
-  for_each    = toset(var.game_session_shards)
-  name        = "gachamind-gs-${each.key}"
+# ── 타깃그룹: gs-gateway ──
+resource "aws_lb_target_group" "gs_gateway" {
+  name        = "gachamind-gs-gateway"
   vpc_id      = aws_vpc.main.id
-  port        = 4001 # 형식상 값. 실제 포트는 ECS 가 등록한다.
+  port        = 4100 # 형식상 값. 실제 포트는 ECS 가 등록한다.
   protocol    = "HTTP"
   target_type = "instance"
 
-  # 샤드는 "내리고 올리기" 배포라 빠지는 타깃에 남은 연결을 오래 붙들 이유가 없다.
+  # 게이트웨이가 빠질 때 그 위로 지나가던 WebSocket 은 끊긴다(무상태라 재접속하면 같은 샤드로 다시 이어진다).
   deregistration_delay = 10
 
   health_check {
@@ -114,19 +115,18 @@ resource "aws_lb_listener" "https" {
   }
 }
 
-resource "aws_lb_listener_rule" "game_session" {
-  for_each     = toset(var.game_session_shards)
+resource "aws_lb_listener_rule" "gs_gateway" {
   listener_arn = aws_lb_listener.https.arn
-  priority     = 101 + index(var.game_session_shards, each.key) # 목록 순서대로 101, 102 …
+  priority     = 101
 
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.game_session[each.key].arn
+    target_group_arn = aws_lb_target_group.gs_gateway.arn
   }
 
   condition {
     path_pattern {
-      values = ["/gs/${each.key}", "/gs/${each.key}/*"]
+      values = ["/gs/*"]
     }
   }
 }

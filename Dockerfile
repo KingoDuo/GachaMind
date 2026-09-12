@@ -36,6 +36,7 @@ COPY apps/matchmaking/package.json apps/matchmaking/
 COPY apps/game-session/package.json apps/game-session/
 COPY apps/user/package.json apps/user/
 COPY apps/results-worker/package.json apps/results-worker/
+COPY apps/gs-gateway/package.json apps/gs-gateway/
 
 # ── 빌드 ────────────────────────────────────────────────────────────────────
 FROM manifests AS build

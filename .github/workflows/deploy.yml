@@ -57,17 +57,18 @@ jobs:
             web: [apps/web/**]
             matchmaking: [apps/matchmaking/**]
             game-session: [apps/game-session/**]
+            gs-gateway: [apps/gs-gateway/**]
             user: [apps/user/**]
             results-worker: [apps/results-worker/**]
       - id: pick
         shell: bash
         run: |
-          all='["web","matchmaking","game-session","user","results-worker"]'
+          all='["web","matchmaking","game-session","gs-gateway","user","results-worker"]'
           if [ "${{ inputs.all }}" = "true" ] || [ "${{ steps.changes.outputs.all }}" = "true" ]; then
             echo "services=$all" >> "$GITHUB_OUTPUT"; exit 0
           fi
           list=()
-          for s in web matchmaking game-session user results-worker; do
+          for s in web matchmaking game-session gs-gateway user results-worker; do
             v=$(echo '${{ toJSON(steps.changes.outputs) }}' | jq -r --arg s "$s" '.[$s]')
             [ "$v" = "true" ] && list+=("\"$s\"")
           done
@@ -123,14 +124,12 @@ jobs:
         run: |
           changed='${{ needs.detect.outputs.services }}'
           pairs=()
-          for s in web matchmaking game-session user results-worker; do
+          for s in web matchmaking game-session gs-gateway user results-worker; do
             if echo "$changed" | jq -e --arg s "$s" 'index($s)' >/dev/null; then
               tag="${{ github.sha }}"
             else
               # "지금 서비스가 실제로 쓰는" 태스크 정의에서 읽는다. 최신 리비전이 아니라 — 롤백됐을 수 있으니.
-              # game-session 은 샤드 서비스(game-session-1, game-session-2 …) 중 첫 번째를 대표로 본다.
-              svc="$s"; [ "$s" = "game-session" ] && svc="game-session-1"
-              td=$(aws ecs describe-services --cluster gachamind --services "$svc" --query 'services[0].taskDefinition' --output text 2>/dev/null || true)
+              td=$(aws ecs describe-services --cluster gachamind --services "$s" --query 'services[0].taskDefinition' --output text 2>/dev/null || true)
               tag=$([ -n "$td" ] && [ "$td" != "None" ] && aws ecs describe-task-definition --task-definition "$td" \
                     --query 'taskDefinition.containerDefinitions[0].image' --output text 2>/dev/null | sed 's/.*://' || true)
               tag="${tag:-${{ github.sha }}}"

@@ -7,8 +7,9 @@ export interface RoomAssignment {
   roomId: string;
   /**
    * 방이 열려 있는 game-session 샤드의 이름. 브라우저는 이 값으로 접속 주소를 만든다
-   * (프로덕션은 ALB 경로 /gs/{shard}, 로컬은 샤드 이름이 곧 포트라 ws://host:{shard}).
-   * 포트가 아니라 이름인 이유: 인스턴스가 여러 대면 같은 포트가 여러 샤드에 있어 포트로는 샤드를 못 가린다.
+   * (프로덕션은 게이트웨이 경로 /gs/{shard}, 로컬은 샤드 이름이 곧 포트라 ws://host:{shard}).
+   * AWS 에서는 ECS 태스크 id 다 — 샤드는 미리 정해진 목록이 아니라 떠 있는 프로세스 하나하나이고,
+   * 늘고 줄 때마다 이름이 생기고 사라진다. 어디에 있는지는 session:{shard} 사본이 말해준다.
    */
   shard: string;
 }
@@ -319,7 +320,7 @@ export function isRoomCode(code: string): boolean {
 // Redis 키 규칙 (matchmaking - game-session 공유 상태)
 //   room:{roomId}    Hash: { shard, capacity, playerCount, phase }
 //   rooms:joinable   Set:  정원이 남은 roomId들
-//   session:{shard}  Hash: { shard, rooms, connections }  샤드별 부하
+//   session:{shard}  Hash: { shard, host, port, rooms, connections }  샤드별 위치와 부하
 
 /**
  * Redis에 기록되는 방 사본. 진짜 상태는 game-session 인메모리이고 이건 matchmaking이 읽는 projection이다.
@@ -355,17 +356,24 @@ export const PROJECTION_TTL_SECONDS = 60;
 export const PROJECTION_HEARTBEAT_INTERVAL_MS = 20_000;
 
 /**
- * game-session 샤드가 자기 부하를 알리는 키.
- * matchmaking이 새 방을 어느 샤드에 둘지(least-connections) 고를 때 읽는다.
- * 키가 없으면 그 샤드는 죽은 것으로 본다.
+ * game-session 샤드가 자기 위치와 부하를 알리는 키.
+ * 이 키의 집합이 곧 "지금 살아있는 샤드 목록"이다 — matchmaking은 고정 목록 없이 이 키들을 스캔해 후보를 고르고,
+ * gs-gateway는 접속 경로의 샤드 이름을 여기서 실제 주소로 바꾼다. 키가 없으면(TTL 만료) 그 샤드는 죽은 것으로 본다.
  */
 export function sessionLoadKey(shard: string): string {
-  return `session:${shard}`;
+  return `${SESSION_LOAD_KEY_PREFIX}${shard}`;
 }
 
-/** 샤드 하나의 현재 부하. 값의 주인은 game-session 인메모리이고 Redis는 그 사본이다. */
+export const SESSION_LOAD_KEY_PREFIX = "session:";
+/** SCAN MATCH 패턴. */
+export const SESSION_LOAD_KEY_PATTERN = `${SESSION_LOAD_KEY_PREFIX}*`;
+
+/** 샤드 하나의 위치와 현재 부하. 값의 주인은 game-session 인메모리이고 Redis는 그 사본이다. */
 export interface SessionLoad {
   shard: string;
+  /** 이 샤드에 TCP 로 닿을 수 있는 주소(인스턴스 사설 IP 와 동적 호스트 포트). 게이트웨이가 쓴다. */
+  host: string;
+  port: number;
   rooms: number;
   connections: number;
 }

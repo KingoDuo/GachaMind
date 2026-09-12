@@ -18,7 +18,7 @@ REGION="${AWS_REGION:-ap-northeast-2}"
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 REGISTRY="$ACCOUNT.dkr.ecr.$REGION.amazonaws.com"
 TAG="${IMAGE_TAG:-$(git -C "$ROOT" rev-parse --short HEAD)$(git -C "$ROOT" diff --quiet HEAD -- . ':!infra' 2>/dev/null || echo -dirty)}"
-ALL_SERVICES=(web matchmaking game-session user results-worker)
+ALL_SERVICES=(web matchmaking game-session gs-gateway user results-worker)
 
 cmd="${1:-all}"; shift || true
 SERVICES=("$@")
@@ -42,10 +42,9 @@ push() {
   done
 }
 
-# 지금 ECS 서비스가 실제로 쓰는 태스크 정의의 태그(최신 리비전이 아니라 — 롤백됐을 수 있으니).
-# game-session 은 샤드 서비스(game-session-1, game-session-2 …) 중 첫 번째를 대표로 본다. 서비스가 없으면(첫 배포) 빈 값.
+# 지금 ECS 서비스가 실제로 쓰는 태스크 정의의 태그(최신 리비전이 아니라 — 롤백됐을 수 있으니). 서비스가 없으면(첫 배포) 빈 값.
 current_tag() {
-  local svc="$1"; [ "$svc" = "game-session" ] && svc="game-session-1"
+  local svc="$1"
   local td
   td=$(aws ecs describe-services --region "$REGION" --cluster gachamind --services "$svc"     --query 'services[0].taskDefinition' --output text 2>/dev/null || true)
   [ -z "$td" ] || [ "$td" = "None" ] && return 0

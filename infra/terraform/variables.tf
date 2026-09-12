@@ -38,16 +38,17 @@ variable "image_tags" {
   EOT
   type        = map(string)
   validation {
-    condition     = alltrue([for s in ["web", "matchmaking", "game-session", "user", "results-worker"] : contains(keys(var.image_tags), s)])
-    error_message = "image_tags 에는 web, matchmaking, game-session, user, results-worker 키가 모두 있어야 한다."
+    condition     = alltrue([for s in ["web", "matchmaking", "game-session", "gs-gateway", "user", "results-worker"] : contains(keys(var.image_tags), s)])
+    error_message = "image_tags 에는 web, matchmaking, game-session, gs-gateway, user, results-worker 키가 모두 있어야 한다."
   }
 }
 
-variable "game_session_shards" {
+variable "game_session_count" {
   description = <<-EOT
-    game-session 샤드 이름 목록. 하나당 ECS 서비스(game-session-{이름})·타깃그룹·ALB 경로(/gs/{이름})가 하나씩 생긴다.
-    컨테이너 포트는 전부 4001 로 같고(bridge 라 호스트 포트는 동적) 샤드는 이름으로만 구분한다.
+    game-session 태스크(샤드) 초기 개수. 샤드는 미리 이름을 정한 목록이 아니라 태스크 하나하나이고,
+    태스크가 스스로 Redis 에 이름(태스크 id)과 주소를 등록한다. 이 값은 서비스를 만들 때의 desired_count 일 뿐이고
+    이후엔 오토스케일링이 소유한다(Terraform 은 desired_count 변경을 무시한다).
   EOT
-  type        = list(string)
-  default     = ["1", "2"]
+  type        = number
+  default     = 2
 }

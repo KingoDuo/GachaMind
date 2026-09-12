@@ -8,7 +8,8 @@
     "dev:game-session": "pnpm --filter game-session dev",
     "dev:user": "pnpm --filter user dev",
     "dev:worker": "pnpm --filter results-worker dev",
-    "dev:all": "concurrently -n web,matchmaking,game-session,user,worker -c blue,green,yellow,magenta,cyan \"pnpm:dev:web\" \"pnpm:dev:matchmaking\" \"pnpm:dev:game-session\" \"pnpm:dev:user\" \"pnpm:dev:worker\"",
+    "dev:gateway": "pnpm --filter gs-gateway dev",
+    "dev:all": "concurrently -n web,matchmaking,game-session,user,worker,gateway -c blue,green,yellow,magenta,cyan,white \"pnpm:dev:web\" \"pnpm:dev:matchmaking\" \"pnpm:dev:game-session\" \"pnpm:dev:user\" \"pnpm:dev:worker\" \"pnpm:dev:gateway\"",
     "build": "pnpm -r build"
   },
   "devDependencies": {

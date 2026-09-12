@@ -9,11 +9,12 @@ import {
 } from "@gachamind/shared";
 import { RoomManager, type Room } from "./room.js";
 import { handleGuess, handlePlayerLeftDuringGame, startGame } from "./game.js";
-import { PORT, SHARD_ID } from "./config.js";
+import { PORT, resolveShardIdentity } from "./config.js";
 import {
   clearSessionLoad,
   isRoomAssignedHere,
   publishSessionLoad,
+  setShardIdentity,
   startProjectionHeartbeat,
   syncOccupancy,
 } from "./occupancy.js";
@@ -32,18 +33,26 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 
 const roomManager = new RoomManager();
 
-// WS 와 같은 포트에 HTTP 도 연다. 로드밸런서 헬스체크가 GET /health 로 살아있는지 확인한다.
+// WS 와 같은 포트에 HTTP 도 연다. GET /health 로 살아있는지 확인할 수 있다.
 const server = createServer((req, res) => {
   if (req.url === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", service: "game-session", shard: SHARD_ID }));
+    res.end(JSON.stringify({ status: "ok", service: "game-session", shard: identity.shardId }));
     return;
   }
   res.writeHead(404);
   res.end();
 });
 const wss = new WebSocketServer({ server });
-server.listen(PORT, () => console.log(`[game-session] shard=${SHARD_ID} pid=${process.pid} listening on ${PORT}`));
+
+// 누구인지(샤드 이름)와 어디인지(주소)를 먼저 정해야 Redis 에 자기를 알릴 수 있다. ECS 에선 메타데이터 파일이 준비될 때까지 잠깐 기다린다.
+const identity = await resolveShardIdentity();
+setShardIdentity(identity);
+server.listen(PORT, () =>
+  console.log(
+    `[game-session] shard=${identity.shardId} pid=${process.pid} listening on ${PORT}, advertised as ${identity.host}:${identity.port}`,
+  ),
+);
 
 interface ConnectionState {
   joinedRoomId: string | null;

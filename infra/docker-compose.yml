@@ -20,6 +20,7 @@ services:
     ports: ["4001:4001"]
     environment:
       PORT: "4001"
+      ADVERTISE_HOST: game-session-1 # gs-gateway 가 이 샤드에 닿는 주소(compose 네트워크 안의 컨테이너명)
       MATCHMAKING_URL: http://matchmaking:4000
       REDIS_URL: redis://redis:6379
       RABBITMQ_URL: amqp://rabbitmq:5672
@@ -32,11 +33,23 @@ services:
     ports: ["4002:4002"]
     environment:
       PORT: "4002"
+      ADVERTISE_HOST: game-session-2
       MATCHMAKING_URL: http://matchmaking:4000
       REDIS_URL: redis://redis:6379
       RABBITMQ_URL: amqp://rabbitmq:5672
       JWT_SECRET: dev-secret # user 가 서명한 세션 토큰을 검증한다. user 와 같은 값이어야 한다
     depends_on: [redis, rabbitmq]
+
+  # AWS 에선 ALB 의 /gs/* 가 전부 여기로 온다. 로컬은 브라우저가 샤드 포트로 직접 붙어서 안 쓰지만,
+  # 같은 모양으로 띄워 둔다(ws://localhost:4100/gs/4001 로 붙으면 game-session-1 로 이어 준다).
+  gs-gateway:
+    build: { context: .., args: { SERVICE: gs-gateway } }
+    image: gachamind/gs-gateway:local
+    ports: ["4100:4100"]
+    environment:
+      PORT: "4100"
+      REDIS_URL: redis://redis:6379
+    depends_on: [redis]
 
   # ── 내부: web/서비스만 호출 → 호스트 포트 불필요 ──
   matchmaking:
@@ -45,7 +58,6 @@ services:
     environment:
       PORT: "4000"
       REDIS_URL: redis://redis:6379
-      GAME_SESSION_SHARDS: "4001,4002" # 로컬은 샤드 이름 = 포트(SHARD_ID 미설정 → 포트가 이름)
     depends_on: [redis]
 
   user:
