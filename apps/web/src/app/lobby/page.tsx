@@ -115,23 +115,28 @@ export default function LobbyPage() {
               {session.user && <span> · {session.user.username}</span>}
             </p>
           </div>
-          {session.user ? (
-            <div className="ml-auto flex shrink-0 gap-2">
-              <button
-                onClick={() => router.push(`/profile/${encodeURIComponent(session.user!.username)}`)}
-                className="xp-button"
-              >
-                내 프로필
-              </button>
-              <button onClick={handleLogout} className="xp-button">
-                로그아웃
-              </button>
-            </div>
-          ) : (
-            <button onClick={() => router.push("/")} className="xp-button ml-auto shrink-0">
-              닉네임 변경
+          <div className="ml-auto flex shrink-0 gap-2">
+            <button onClick={() => router.push("/leaderboard")} className="xp-button">
+              랭킹
             </button>
-          )}
+            {session.user ? (
+              <>
+                <button
+                  onClick={() => router.push(`/profile/${encodeURIComponent(session.user!.username)}`)}
+                  className="xp-button"
+                >
+                  내 프로필
+                </button>
+                <button onClick={handleLogout} className="xp-button">
+                  로그아웃
+                </button>
+              </>
+            ) : (
+              <button onClick={() => router.push("/")} className="xp-button">
+                닉네임 변경
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-2">

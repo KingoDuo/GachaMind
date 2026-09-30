@@ -12,7 +12,7 @@ export class ProfileError extends Error {
   }
 }
 
-async function getJson<T>(url: string): Promise<T> {
+export async function getJson<T>(url: string): Promise<T> {
   let res: Response;
   try {
     res = await fetch(url, { cache: "no-store" });

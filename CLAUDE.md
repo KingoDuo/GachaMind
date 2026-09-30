@@ -48,7 +48,7 @@
 - **내부(web/서비스만 호출):**
   - `matchmaking`·`user`·`results-worker` — 브라우저는 직접 안 부른다.
 
-**유저 데이터 조회는 BFF 경로**로: `브라우저 → web → user`. web은 데이터를 소유/캐싱하지 않는 통로이자, 세션쿠키↔토큰 변환 지점이며, user 서비스를 외부에 노출하지 않는 방패다. user 의 내부 API(`GET /users/{username}/profile|games`, `POST /internal/games`)는 인증이 없다 — 누구의 것을 보여줄지는 web 이 정한다.
+**유저 데이터 조회는 BFF 경로**로: `브라우저 → web → user`. web은 데이터를 소유/캐싱하지 않는 통로이자, 세션쿠키↔토큰 변환 지점이며, user 서비스를 외부에 노출하지 않는 방패다. user 의 내부 API(`GET /users/{username}/profile|games`, `GET /leaderboard[/{username}]`, `POST /internal/games`)는 인증이 없다 — 누구의 것을 보여줄지는 web 이 정한다.
 
 ### 방 배정(매칭) 흐름
 1. 브라우저가 web(BFF)에 요청 → web이 **matchmaking**에 위임.
@@ -75,7 +75,7 @@
 
 ### 화면 렌더링
 - 로비/인게임 화면 모두 **같은 Next.js 앱**의 다른 라우트로 렌더링. game-session은 화면을 그리지 않는 headless 서버.
-- 화면은 넷: `/`(닉네임 입력) → `/lobby`(방 목록·방 만들기·빠른 시작·코드 입장) → `/room/{코드}`(게임), 그리고 `/profile/{아이디}`(프로필: 계정 + 누적 전적 + 최근 게임 목록. 누구나 볼 수 있고 `/profile`은 내 것으로 리다이렉트).
+- 화면은 다섯: `/`(닉네임 입력) → `/lobby`(방 목록·방 만들기·빠른 시작·코드 입장) → `/room/{코드}`(게임), 그리고 `/profile/{아이디}`(프로필: 계정 + 누적 전적 + 최근 게임 목록. 누구나 볼 수 있고 `/profile`은 내 것으로 리다이렉트), `/leaderboard`(랭킹: 누적 점수·1등 횟수·한 판 최고점 탭, 회원 상위 100명·전체 기간, 로그인했으면 내 순위. 로비처럼 진입 1회 + 새로고침).
 - 방 목록은 `GET /api/rooms` → matchmaking `GET /rooms`. **최초 진입 1회 + 새로고침 버튼**으로만 받는 스냅샷이다(폴링·구독 없음). 참여 가능한 방(`rooms:joinable`)만 나오므로 정원이 찬 방과 아직 아무도 접속하지 않은 예약 방은 빠진다.
 - 닉네임은 sessionStorage(`gachamind:nickname`)에 둔다. 쿼리스트링으로 나르면 방 링크를 복사해 줄 때 남의 닉네임이 따라간다. 닉네임 없이 방 링크로 들어오면 `/?next=/room/{코드}`로 보내 입력받고 되돌린다. 로그인한 사람도 같은 자리에 계정 닉네임을 넣으므로 로비·방 화면은 게스트/회원을 구분하지 않는다.
 
@@ -94,12 +94,12 @@
 ## 디렉토리 구조
 ```
 apps/
-  web/             # Next.js — UI + BFF.  /api/rooms 는 matchmaking, /api/auth·/api/profiles 는 user 로 프록시(세션 쿠키↔토큰)
-                   #   app/(입구) app/lobby app/room/[roomId] app/profile/[username], features/{auth,lobby,room,player,profile,ui}
+  web/             # Next.js — UI + BFF.  /api/rooms 는 matchmaking, /api/auth·/api/profiles·/api/leaderboard 는 user 로 프록시(세션 쿠키↔토큰)
+                   #   app/(입구) app/lobby app/room/[roomId] app/profile/[username] app/leaderboard, features/{auth,lobby,room,player,profile,leaderboard,ui}
   matchmaking/     # Fastify — 방 배정 (Redis 매칭 상태 소유)
   game-session/    # ws — 실시간 authority. src/room.ts(Room/RoomManager), src/index.ts, src/config.ts(샤드 이름·주소 결정)
   gs-gateway/      # /gs/{shard} WebSocket 을 Redis 의 session:{shard} 주소로 이어 주는 중계기
-  user/            # NestJS + TypeORM(Postgres). user DB 의 주인. src/auth(가입·로그인·JWT) src/user(계정) src/history(전적 저장·조회) src/migrations
+  user/            # NestJS + TypeORM(Postgres). user DB 의 주인. src/auth(가입·로그인·JWT) src/user(계정) src/history(전적 저장·조회·리더보드) src/migrations
   results-worker/  # Node + amqplib — game.events 소비 → user POST /internal/games 로 전달
 packages/
   shared/          # 서비스 간 계약 (메시지 타입, Redis 키, MQ 이벤트 스키마)
@@ -150,5 +150,5 @@ Docker 이미지는 루트 `Dockerfile` 하나로 만든다(`--build-arg SERVICE
 - game-session: 드로잉/채팅/정답판정/게임루프, Redis occupancy 동기화, matchmaking 콜백, 세션 쿠키 신원 확인 구현됨. 클라이언트 자동 재연결은 없음.
 - user: 가입/로그인/`me`, 전적 저장(`POST /internal/games`, gameId 멱등 + `user_stats` 집계 한 트랜잭션), 프로필·전적 조회(`GET /users/{username}/profile|games`) 구현됨. 스키마는 TypeORM 마이그레이션(`synchronize: false`, 기동 시 `migrationsRun`). Baseline 마이그레이션이 기존 테이블(`users`, worker 시절의 `games`/`game_players`)을 IF NOT EXISTS 로 받아들이고, 이후 마이그레이션이 `player_count`·`user_stats`·인덱스를 더하며 기존 데이터를 백필한다. 마이그레이션은 컬럼 추가만 하고 지우거나 이름을 바꾸지 않는다(롤링 배포 중 옛 태스크와 공존).
 - results-worker: `game.events` 소비 → user 내부 API 전달(멱등은 user 가 보장). DB 접속 정보 없음.
-- 프로필 화면(`/profile/{아이디}`) 구현됨. 랭킹(리더보드)은 `user_stats` 만 읽으면 되지만 화면·API는 아직 없다. 닉네임 변경은 없다(JWT 본문에 닉네임이 들어 있어 바꾸려면 재발급 설계가 필요).
+- 프로필 화면(`/profile/{아이디}`) 구현됨. 랭킹(`/leaderboard`)은 `user_stats` 를 정렬 기준별 인덱스로 읽는다(동점은 같은 등수, 전체 기간만. 주간·월간은 없음). 닉네임 변경은 없다(JWT 본문에 닉네임이 들어 있어 바꾸려면 재발급 설계가 필요).
 - 공유 계약(`packages/shared`)에 이미 메시지 타입/Redis 키/이벤트 스키마의 뼈대가 있다.
