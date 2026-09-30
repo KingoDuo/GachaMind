@@ -470,3 +470,37 @@ export interface ProfileResponse {
   user: PublicUser;
   stats: PlayerStats;
 }
+
+// 리더보드 (web - user)
+//
+// user_stats 를 그대로 순위로 읽는다(전체 기간). 동점은 같은 등수(1, 2, 2, 4).
+
+export const LEADERBOARD_SORTS = ["totalScore", "wins", "bestScore"] as const;
+export type LeaderboardSort = (typeof LEADERBOARD_SORTS)[number];
+export const DEFAULT_LEADERBOARD_SORT: LeaderboardSort = "totalScore";
+
+/** 한 번에 보여주는 상위 인원. */
+export const LEADERBOARD_LIMIT = 100;
+
+export interface LeaderboardEntry {
+  rank: number;
+  username: string;
+  /** 마지막 게임 당시 닉네임. */
+  nickname: string;
+  gamesPlayed: number;
+  wins: number;
+  totalScore: number;
+  bestScore: number;
+}
+
+/** user 의 GET /leaderboard, web 의 GET /api/leaderboard 응답. */
+export interface LeaderboardResponse {
+  sort: LeaderboardSort;
+  entries: LeaderboardEntry[];
+}
+
+/** user 의 GET /leaderboard/{username}, web 의 GET /api/leaderboard/{username} 응답. 한 판도 없으면 entry 는 null. */
+export interface LeaderboardRankResponse {
+  sort: LeaderboardSort;
+  entry: LeaderboardEntry | null;
+}

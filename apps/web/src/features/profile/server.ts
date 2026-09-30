@@ -8,7 +8,7 @@ export type Lookup<T> =
   | { ok: true; data: T }
   | { ok: false; reason: "unavailable" | "not-found" | "bad-request" };
 
-async function fetchInternal<T>(url: string): Promise<Lookup<T>> {
+export async function fetchInternal<T>(url: string): Promise<Lookup<T>> {
   let res: Response;
   try {
     res = await fetch(url, { cache: "no-store" });
